@@ -1539,6 +1539,11 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
     glm::dmat4 instanceTransform = glm::dmat4(1.0);
     instanceTransform = glm::translate(instanceTransform, position);
     instanceTransform *= glm::mat4_cast(rotation);
+	
+    //upside down.
+    instanceTransform *= CesiumGeometry::Transforms::Y_UP_TO_Z_UP;
+    instanceTransform *= CesiumGeometry::Transforms::Y_UP_TO_Z_UP;
+
     instanceTransform = glm::scale(instanceTransform, scale);
 
     // Apply node transformation
