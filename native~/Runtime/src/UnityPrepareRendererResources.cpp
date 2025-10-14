@@ -1539,8 +1539,6 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
 
     // upside down.
     instanceTransform *= CesiumGeometry::Transforms::Y_UP_TO_Z_UP;
-    instanceTransform *= CesiumGeometry::Transforms::Y_UP_TO_Z_UP;
-
     instanceTransform = glm::scale(instanceTransform, scale);
 
     // Apply node transformation
