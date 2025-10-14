@@ -334,7 +334,8 @@ namespace CesiumForUnity
                 : "RelWithDebInfo";
             library.InstallDirectory = GetInstallDirectoryForPlatform(platform, packagePath);
             library.CleanBuild = platform.isCleanBuild;
-
+			library.ExtraConfigureArgs.Add("-G \"Visual Studio 17 2022\"");
+			
             if (IsEditor(platform))
                 library.ExtraConfigureArgs.Add("-DEDITOR=on");
 
@@ -370,7 +371,7 @@ namespace CesiumForUnity
             if (platform.platform == BuildTarget.WSAPlayer)
             {
                 library.ExtraConfigureArgs.Add("-DCMAKE_SYSTEM_NAME=WindowsStore");
-                library.ExtraConfigureArgs.Add("-DCMAKE_SYSTEM_VERSION=10.0");
+                library.ExtraConfigureArgs.Add("-DCMAKE_SYSTEM_VERSION=10.0.19041.0");
                 switch (cpu)
                 {
                     case LibraryCpuArchitecture.x86_64:
