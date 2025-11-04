@@ -12,6 +12,7 @@ namespace CesiumForUnity
         private SerializedProperty _ionAssetID;
         private SerializedProperty _ionAccessToken;
         private SerializedProperty _ionServer;
+        private SerializedProperty _assetOptions;
 
         private void OnEnable()
         {
@@ -24,6 +25,7 @@ namespace CesiumForUnity
             this._ionAssetID = this.serializedObject.FindProperty("_ionAssetID");
             this._ionAccessToken = this.serializedObject.FindProperty("_ionAccessToken");
             this._ionServer = this.serializedObject.FindProperty("_ionServer");
+            this._assetOptions = this.serializedObject.FindProperty("_assetOptions");
         }
 
         private void OnDisable()
@@ -39,7 +41,7 @@ namespace CesiumForUnity
             this.serializedObject.Update();
 
             EditorGUIUtility.labelWidth = CesiumEditorStyle.inspectorLabelWidth;
-            DrawTroubleshootButton();
+            DrawInspectorButtons();
             EditorGUILayout.Space(5);
             DrawIonProperties();
             EditorGUILayout.Space(5);
@@ -48,9 +50,17 @@ namespace CesiumForUnity
             this.serializedObject.ApplyModifiedProperties();
         }
 
-        private void DrawTroubleshootButton()
+        private void DrawInspectorButtons()
         {
-            GUIContent troubleshootTokenContent = new GUIContent(
+            GUILayout.BeginHorizontal();
+            var refreshOverlayContent = new GUIContent("Refresh Overlay",
+                "Refreshes this overlay.");
+            if (GUILayout.Button(refreshOverlayContent))
+            {
+                this._ionOverlay.Refresh();
+            }
+            
+            var troubleshootTokenContent = new GUIContent(
                "Troubleshoot Token",
                "Check if the Cesium ion token used to access this raster overlay is working " +
                "correctly, and fix it if necessary.");
@@ -58,6 +68,7 @@ namespace CesiumForUnity
             {
                 IonTokenTroubleshootingWindow.ShowWindow(this._ionOverlay, false);
             }
+            GUILayout.EndHorizontal();
         }
 
         private void DrawIonProperties()
@@ -74,6 +85,12 @@ namespace CesiumForUnity
 
             GUIContent ionServerContent = new GUIContent("ion Server", "The Cesium ion server to use.");
             EditorGUILayout.PropertyField(this._ionServer, ionServerContent);
+
+            GUIContent assetOptionsContent = new GUIContent(
+                "Asset Options",
+                "Extra options to pass to Cesium ion when accessing the asset. " +
+                "This should be a JSON string.");
+            EditorGUILayout.DelayedTextField(this._assetOptions, assetOptionsContent);
         }
 
         private void DrawRasterOverlayProperties()
