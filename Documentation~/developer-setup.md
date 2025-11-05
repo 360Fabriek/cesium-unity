@@ -34,7 +34,7 @@ Then, clone the `cesium-unity` (plugin) project to a folder named `com.cesium.un
 
 ```
 cd cesium-unity-samples/Packages
-git clone --recurse-submodules git@github.com:CesiumGS/cesium-unity.git com.cesium.unity
+git clone --recurse-submodules git@github.com:360Fabriek/cesium-unity.git com.cesium.unity
 ```
 
 Be sure to also clone the submodules. If you forgot the `--recurse-submodules` option when you cloned, run `git submodule update --init --recursive` inside the `com.cesium.unity` folder.
@@ -137,7 +137,7 @@ To create a release package of Cesium for Unity, suitable to be installed with t
 $ENV:UNITY="C:\Program Files\Unity\Hub\Editor\2022.3.41f1\Editor\Unity.exe"
 mkdir -p c:\cesium\CesiumForUnityBuildProject\Packages
 cd c:\cesium\CesiumForUnityBuildProject\Packages
-git clone --recurse-submodules git@github.com:CesiumGS/cesium-unity.git com.cesium.unity
+git clone --recurse-submodules git@github.com:360Fabriek/cesium-unity.git com.cesium.unity
 cd com.cesium.unity
 dotnet publish Reinterop~ -o .
 dotnet run --project Build~
