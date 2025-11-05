@@ -1831,6 +1831,20 @@ void* UnityPrepareRendererResources::prepareInMainThread(
                   materialProperties);
             }
 
+            // i3dm instances should always render double-sided to avoid flipped normals.
+            material.SetFloat(
+                materialProperties.getDoubleSidedEnableID(),
+                1.0f);
+            material.SetFloat(
+                materialProperties.getCullID(),
+                float(UnityEngine::Rendering::CullMode::Off));
+            material.SetFloat(
+                materialProperties.getCullModeID(),
+                float(UnityEngine::Rendering::CullMode::Off));
+            material.SetFloat(
+                materialProperties.getBuiltInCullModeID(),
+                float(UnityEngine::Rendering::CullMode::Off));
+
             // set shader for GPU Instancing
             material.enableInstancing(true);
 
