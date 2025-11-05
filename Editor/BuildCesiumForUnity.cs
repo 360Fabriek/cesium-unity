@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using UnityEditor;
+using Unity.CodeEditor;
 using UnityEditor.Build.Reporting;
 using UnityEditor.Compilation;
 using UnityEditor.PackageManager;
@@ -150,6 +151,7 @@ namespace CesiumForUnity
 
         private static void BuildPlayer(BuildTargetGroup targetGroup, BuildTarget target, string outputPath, bool deleteProject = true)
         {
+			CodeEditor.Editor.CurrentCodeEditor.SyncAll();
             BuildReport report = BuildPipeline.BuildPlayer(new BuildPlayerOptions()
             {
                 locationPathName = Path.Combine(outputPath, "game"),
