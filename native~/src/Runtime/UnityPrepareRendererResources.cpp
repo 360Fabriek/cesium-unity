@@ -7,6 +7,7 @@
 #include "UnityTransforms.h"
 
 #include <Cesium3DTilesSelection/Tile.h>
+#include <Cesium3DTilesSelection/TileID.h>
 #include <Cesium3DTilesSelection/Tileset.h>
 #include <CesiumGeometry/Transforms.h>
 #include <CesiumGeospatial/Ellipsoid.h>
@@ -75,6 +76,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <unordered_map>
 #include <variant>
 
@@ -156,6 +158,28 @@ struct InstanceData {
    */
   uint32_t batchId;
 };
+
+bool isFinite(const glm::dvec3& value) {
+  return std::isfinite(value.x) && std::isfinite(value.y) &&
+         std::isfinite(value.z);
+}
+
+bool isFinite(const glm::dquat& value) {
+  return std::isfinite(value.w) && std::isfinite(value.x) &&
+         std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+bool isFinite(const glm::dmat4& value) {
+  for (int column = 0; column < 4; ++column) {
+    for (int row = 0; row < 4; ++row) {
+      if (!std::isfinite(value[column][row])) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
 
 template <typename TIndex> struct CopyVertexColors {
   uint8_t* pWritePos;
@@ -903,6 +927,24 @@ struct LoadThreadResult {
   std::vector<CesiumPrimitiveInfo> primitiveInfos{};
 };
 
+bool hasGpuInstancingNodes(const CesiumGltf::Model& model) {
+  for (const CesiumGltf::Node& node : model.nodes) {
+    const auto* pGpuInstancing =
+        node.getExtension<CesiumGltf::ExtensionExtMeshGpuInstancing>();
+    if (pGpuInstancing && !pGpuInstancing->attributes.empty()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void releaseMeshesToPool(const System::Array1<UnityEngine::Mesh>& meshes) {
+  for (int32_t i = 0, len = meshes.Length(); i < len; ++i) {
+    CesiumForUnity::CesiumObjectPools::MeshPool().Release(meshes[i]);
+  }
+}
+
 UnityPrepareRendererResources::UnityPrepareRendererResources(
     const UnityEngine::GameObject& tilesetGameObject)
     : _tilesetGameObject(tilesetGameObject), _materialProperties() {}
@@ -1506,6 +1548,8 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
             *pScaleAccessor);
   }
 
+  int64_t droppedInvalidInstances = 0;
+
   // Create InstanceData for each instance
   for (int64_t i = 0; i < instanceCount; ++i) {
     InstanceData instanceData;
@@ -1520,6 +1564,10 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
           translation.value[1],
           translation.value[2]);
     }
+    if (!isFinite(position)) {
+      ++droppedInvalidInstances;
+      continue;
+    }
 
     // Rotation settings (quaternion)
     glm::dquat rotation(1.0, 0.0, 0.0, 0.0); // Unit quaternion
@@ -1532,6 +1580,20 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
           rot.value[1],
           rot.value[2]); // w, x, y, z
     }
+    if (!isFinite(rotation)) {
+      ++droppedInvalidInstances;
+      continue;
+    }
+
+    double rotationMagnitudeSquared =
+        rotation.w * rotation.w + rotation.x * rotation.x +
+        rotation.y * rotation.y + rotation.z * rotation.z;
+    if (!std::isfinite(rotationMagnitudeSquared) ||
+        rotationMagnitudeSquared <= 0.0) {
+      ++droppedInvalidInstances;
+      continue;
+    }
+    rotation = glm::normalize(rotation);
 
     // Set scale
     glm::dvec3 scale(1.0);
@@ -1540,6 +1602,10 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
       auto scaleVec = scaleView[i];
       scale =
           glm::dvec3(scaleVec.value[0], scaleVec.value[1], scaleVec.value[2]);
+    }
+    if (!isFinite(scale)) {
+      ++droppedInvalidInstances;
+      continue;
     }
 
     // Construct the transformation matrix
@@ -1550,6 +1616,10 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
 
     // Apply node transformation
     instanceData.transform = nodeTransform * instanceTransform;
+    if (!isFinite(instanceData.transform)) {
+      ++droppedInvalidInstances;
+      continue;
+    }
 
     // Set other properties
     instanceData.color = glm::dvec4(1.0, 1.0, 1.0, 1.0); // white color
@@ -1557,14 +1627,13 @@ void ExtractInstanceDataFromExtMeshGpuInstancing(
 
     outInstanceData.push_back(instanceData);
   }
-}
 
-bool CheckForExtMeshGpuInstancing(
-    const CesiumGltf::Model& gltf,
-    const CesiumGltf::Node& node) {
-  // Check if the EXT_mesh_gpu_instancing extension is present
-  return node.getExtension<CesiumGltf::ExtensionExtMeshGpuInstancing>() !=
-         nullptr;
+  if (droppedInvalidInstances > 0) {
+    UnityEngine::Debug::LogWarning(System::String(
+        "Ignored " + std::to_string(droppedInvalidInstances) +
+        " invalid EXT_mesh_gpu_instancing instances while preparing Unity "
+        "renderer resources."));
+  }
 }
 
 void ExtractInstanceDataFromGltfModel(
@@ -1616,6 +1685,10 @@ void* UnityPrepareRendererResources::prepareInMainThread(
 
   CESIUM_TRACE("Cesium::LoadModel");
   const Model& model = pRenderContent->getModel();
+  const bool isUpsampledI3dmTile =
+      std::holds_alternative<CesiumGeometry::UpsampledQuadtreeNode>(
+          tile.getTileID()) &&
+      hasGpuInstancingNodes(model);
 
   std::string name = "glTF";
   auto urlIt = model.extras.find("Cesium3DTiles_TileUrl");
@@ -1692,34 +1765,40 @@ void* UnityPrepareRendererResources::prepareInMainThread(
     }
   }
 
-  model.forEachPrimitiveInScene(
-      -1,
-      [&meshes,
-       &primitiveInfos,
-       &pModelGameObject,
-       &tileTransform,
-       &meshIndex,
-       &i3dmGlobalIndex,
-       &tilesetComponent,
-       pCoordinateSystem,
-       createPhysicsMeshes,
-       showTilesInHierarchy,
-       &metadataComponent,
-       &tile,
-       &materialProperties = this->_materialProperties,
-       tilesetLayer = this->_tilesetGameObject.layer()](
-          const Model& gltf,
-          const Node& node,
-          const Mesh& mesh,
-          const MeshPrimitive& primitive,
-          const glm::dmat4& transform) {
-        const CesiumPrimitiveInfo& primitiveInfo = primitiveInfos[meshIndex];
-        UnityEngine::Mesh unityMesh = meshes[meshIndex++];
-        if (unityMesh == nullptr) {
-          // This indicates Unity destroyed the mesh already, which really
-          // shouldn't happen.
-          return;
-        }
+  if (isUpsampledI3dmTile) {
+    // Upsampled tiles derived from i3dm should not render geometry, but they
+    // still need a tile GameObject so selection/activation lifecycle remains
+    // consistent.
+    releaseMeshesToPool(pLoadThreadResult->meshes);
+  } else {
+    model.forEachPrimitiveInScene(
+        -1,
+        [&meshes,
+         &primitiveInfos,
+         &pModelGameObject,
+         &tileTransform,
+         &meshIndex,
+         &i3dmGlobalIndex,
+         &tilesetComponent,
+         pCoordinateSystem,
+         createPhysicsMeshes,
+         showTilesInHierarchy,
+         &metadataComponent,
+         &tile,
+         &materialProperties = this->_materialProperties,
+         tilesetLayer = this->_tilesetGameObject.layer()](
+            const Model& gltf,
+            const Node& node,
+            const Mesh& mesh,
+            const MeshPrimitive& primitive,
+            const glm::dmat4& transform) {
+          const CesiumPrimitiveInfo& primitiveInfo = primitiveInfos[meshIndex];
+          UnityEngine::Mesh unityMesh = meshes[meshIndex++];
+          if (unityMesh == nullptr) {
+            // This indicates Unity destroyed the mesh already, which really
+            // shouldn't happen.
+            return;
+          }
 
         auto positionAccessorIt = primitive.attributes.find("POSITION");
         if (positionAccessorIt == primitive.attributes.end()) {
@@ -1751,57 +1830,63 @@ void* UnityPrepareRendererResources::prepareInMainThread(
         primitiveGameObject.transform().parent(pModelGameObject->transform());
         primitiveGameObject.layer(tilesetLayer);
 
-        // check i3dm
-        bool isI3dmType = CheckForExtMeshGpuInstancing(gltf, node);
+        // Check whether this primitive has valid i3dm instancing attributes.
+        const auto* pGpuInstancing =
+            node.getExtension<CesiumGltf::ExtensionExtMeshGpuInstancing>();
+        bool isI3dmType =
+            pGpuInstancing && !pGpuInstancing->attributes.empty();
 
         std::vector<InstanceData> instanceData;
         std::vector<UnityEngine::GameObject> intanceObjects;
         int32_t currentI3dmIndex = -1;
 
         if (isI3dmType) {
-          // Extract instance data from models already processed by existing
-          // converters
+          currentI3dmIndex = i3dmGlobalIndex;
+          ExtractInstanceDataFromExtMeshGpuInstancing(
+              gltf,
+              node,
+              *pGpuInstancing,
+              tileTransform * transform,
+              instanceData);
 
-          ::DotNet::UnityEngine::Object::DestroyImmediate(primitiveGameObject);
-
-          // Extract only instances of the current node (i3dm) (to prevent
-          // duplication)
-          const auto* pGpuInstancing =
-              node.getExtension<CesiumGltf::ExtensionExtMeshGpuInstancing>();
-
-          if (pGpuInstancing && !pGpuInstancing->attributes.empty()) {
-            currentI3dmIndex = i3dmGlobalIndex;
-            ExtractInstanceDataFromExtMeshGpuInstancing(
-                gltf,
-                node,
-                *pGpuInstancing,
-                tileTransform * transform,
-                instanceData);
+          if (instanceData.empty()) {
+            // If no valid instances were extracted, render this primitive as a
+            // regular mesh so upsampled i3dm-derived tiles don't become empty.
+            isI3dmType = false;
+            currentI3dmIndex = -1;
+          } else {
+            // Extract instance data from models already processed by existing
+            // converters.
+            ::DotNet::UnityEngine::Object::DestroyImmediate(
+                primitiveGameObject);
           }
 
-          for (size_t instanceDataIndex = 0;
-               instanceDataIndex < instanceData.size();
-               ++instanceDataIndex) {
+          if (isI3dmType) {
+            for (size_t instanceDataIndex = 0;
+                 instanceDataIndex < instanceData.size();
+                 ++instanceDataIndex) {
 
-            UnityEngine::GameObject intanceGameObject(System::String(
-                "I3dm " + std::to_string(currentI3dmIndex) + " Mesh " +
-                std::to_string(instanceDataIndex) + " Primitive " +
-                std::to_string(primitiveIndex)));
-            if (showTilesInHierarchy) {
-              intanceGameObject.hideFlags(UnityEngine::HideFlags::DontSave);
-            } else {
-              intanceGameObject.hideFlags(
-                  UnityEngine::HideFlags::DontSave |
-                  UnityEngine::HideFlags::HideInHierarchy);
+              UnityEngine::GameObject intanceGameObject(System::String(
+                  "I3dm " + std::to_string(currentI3dmIndex) + " Mesh " +
+                  std::to_string(instanceDataIndex) + " Primitive " +
+                  std::to_string(primitiveIndex)));
+              if (showTilesInHierarchy) {
+                intanceGameObject.hideFlags(UnityEngine::HideFlags::DontSave);
+              } else {
+                intanceGameObject.hideFlags(
+                    UnityEngine::HideFlags::DontSave |
+                    UnityEngine::HideFlags::HideInHierarchy);
+              }
+
+              intanceGameObject.transform().parent(
+                  pModelGameObject->transform());
+              intanceGameObject.layer(tilesetLayer);
+              intanceObjects.push_back(intanceGameObject);
             }
 
-            intanceGameObject.transform().parent(pModelGameObject->transform());
-            intanceGameObject.layer(tilesetLayer);
-            intanceObjects.push_back(intanceGameObject);
+            // Increment the index with the next i3dm.
+            i3dmGlobalIndex++;
           }
-
-          // Increment the index with the next i3dm
-          i3dmGlobalIndex++;
         }
 
         glm::dmat4 modelToEcef = tileTransform * transform;
@@ -1861,7 +1946,9 @@ void* UnityPrepareRendererResources::prepareInMainThread(
             const std::string* url =
                 std::get_if<std::string>(&tile.getTileID());
 
-            std::string groupId = *url;
+            std::string groupId = url ? *url
+                                      : Cesium3DTilesSelection::TileIdUtilities::
+                                            createTileIdString(tile.getTileID());
             if (currentI3dmIndex < 0) {
               // This should not normally happen, but fall back to the most
               // recent global index
@@ -1898,9 +1985,26 @@ void* UnityPrepareRendererResources::prepareInMainThread(
               }
             }
 
+            System::Array1<CesiumForUnity::I3dmInstanceRenderer>
+                existingRenderers =
+                    pModelGameObject
+                        ->GetComponents<CesiumForUnity::I3dmInstanceRenderer>();
+
             CesiumForUnity::I3dmInstanceRenderer i3dmInstanceRenderer =
-                pModelGameObject
-                    ->AddComponent<CesiumForUnity::I3dmInstanceRenderer>();
+                existingRenderers.Length() > 0
+                    ? existingRenderers[0]
+                    : pModelGameObject
+                          ->AddComponent<CesiumForUnity::I3dmInstanceRenderer>(
+                          );
+
+            if (existingRenderers.Length() > 0) {
+              for (int32_t rendererIndex = 1;
+                   rendererIndex < existingRenderers.Length();
+                   ++rendererIndex) {
+                ::DotNet::UnityEngine::Object::DestroyImmediate(
+                    existingRenderers[rendererIndex]);
+              }
+            }
 
             DotNet::System::Collections::Generic::List1<
                 DotNet::Unity::Mathematics::double4x4>
@@ -1917,7 +2021,8 @@ void* UnityPrepareRendererResources::prepareInMainThread(
                 System::String(groupId),
                 baseMesh,
                 material,
-                matList);
+                matList,
+                static_cast<int32_t>(meshIndex - 1));
 
             // For backwards compatibility.
             if (metadataComponent != nullptr) {
@@ -2042,7 +2147,18 @@ void* UnityPrepareRendererResources::prepareInMainThread(
             }
           }
         }
-      });
+        });
+  }
+
+  if (!isUpsampledI3dmTile &&
+      pModelGameObject->transform().childCount() == 0 &&
+      pModelGameObject
+              ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>() ==
+          nullptr) {
+    releaseMeshesToPool(pLoadThreadResult->meshes);
+    UnityLifetime::Destroy(*pModelGameObject);
+    return nullptr;
+  }
 
   tilesetComponent.BroadcastNewGameObjectCreated(*pModelGameObject);
 
@@ -2243,6 +2359,30 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     return;
 
   std::string key = rasterTile.getOverlay().getName();
+  int32_t overlayTextureCoordinatePropertyID = -1;
+  int32_t overlayTexturePropertyID = -1;
+  int32_t overlayTranslationScalePropertyID = -1;
+
+  auto maybeID =
+      this->_materialProperties.getOverlayTextureCoordinateIndexID(key);
+  if (maybeID) {
+    overlayTextureCoordinatePropertyID = *maybeID;
+  }
+
+  maybeID = this->_materialProperties.getOverlayTextureID(key);
+  if (maybeID) {
+    overlayTexturePropertyID = *maybeID;
+  }
+
+  maybeID = this->_materialProperties.getOverlayTranslationAndScaleID(key);
+  if (maybeID) {
+    overlayTranslationScalePropertyID = *maybeID;
+  }
+
+  if (overlayTextureCoordinatePropertyID < 0 && overlayTexturePropertyID < 0 &&
+      overlayTranslationScalePropertyID < 0) {
+    return;
+  }
 
   // We're assuming here that the order of primitives in the transform chain
   // is the same as the order in the `primitiveInfos`, which should
@@ -2289,15 +2429,14 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     // index - multiple overlays can use the _CESIUMOVERLAY_0 attribute for
     // example. The _CESIUMOVERLAY_<i> attributes correspond to unique
     // _projections_, not unique overlays.
-    auto maybeID =
-        this->_materialProperties.getOverlayTextureCoordinateIndexID(key);
-    if (maybeID) {
-      material.SetFloat(*maybeID, static_cast<float>(texCoordIndexIt->second));
+    if (overlayTextureCoordinatePropertyID >= 0) {
+      material.SetFloat(
+          overlayTextureCoordinatePropertyID,
+          static_cast<float>(texCoordIndexIt->second));
     }
 
-    maybeID = this->_materialProperties.getOverlayTextureID(key);
-    if (maybeID) {
-      material.SetTexture(*maybeID, *pTexture);
+    if (overlayTexturePropertyID >= 0) {
+      material.SetTexture(overlayTexturePropertyID, *pTexture);
     }
 
     UnityEngine::Vector4 translationAndScale{
@@ -2306,9 +2445,51 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
         float(scale.x),
         float(scale.y)};
 
-    maybeID = this->_materialProperties.getOverlayTranslationAndScaleID(key);
-    if (maybeID) {
-      material.SetVector(*maybeID, translationAndScale);
+    if (overlayTranslationScalePropertyID >= 0) {
+      material.SetVector(
+          overlayTranslationScalePropertyID,
+          translationAndScale);
+    }
+  }
+
+  System::Array1<CesiumForUnity::I3dmInstanceRenderer> i3dmRenderers =
+      pCesiumGameObject->pGameObject
+          ->GetComponents<CesiumForUnity::I3dmInstanceRenderer>();
+
+  if (i3dmRenderers.Length() == 0) {
+    return;
+  }
+
+  UnityEngine::Vector4 translationAndScale{
+      float(translation.x),
+      float(translation.y),
+      float(scale.x),
+      float(scale.y)};
+
+  for (int32_t primitive = 0,
+               primitiveCount =
+                   static_cast<int32_t>(pCesiumGameObject->primitiveInfos.size());
+       primitive < primitiveCount;
+       ++primitive) {
+    const CesiumPrimitiveInfo& primitiveInfo =
+        pCesiumGameObject->primitiveInfos[primitive];
+
+    auto texCoordIndexIt =
+        primitiveInfo.rasterOverlayUvIndexMap.find(overlayTextureCoordinateID);
+    if (texCoordIndexIt == primitiveInfo.rasterOverlayUvIndexMap.end()) {
+      continue;
+    }
+
+    float textureCoordinateIndex = static_cast<float>(texCoordIndexIt->second);
+    for (int32_t i = 0, len = i3dmRenderers.Length(); i < len; ++i) {
+      i3dmRenderers[i].SetRasterOverlayForPrimitive(
+          primitive,
+          overlayTextureCoordinatePropertyID,
+          textureCoordinateIndex,
+          overlayTexturePropertyID,
+          *pTexture,
+          overlayTranslationScalePropertyID,
+          translationAndScale);
     }
   }
 }
@@ -2359,6 +2540,31 @@ void UnityPrepareRendererResources::detachRasterInMainThread(
         rasterTile.getOverlay().getName());
     if (maybeID) {
       material.SetTexture(*maybeID, UnityEngine::Texture(nullptr));
+    }
+  }
+
+  auto maybeOverlayTextureID = this->_materialProperties.getOverlayTextureID(
+      rasterTile.getOverlay().getName());
+  if (!maybeOverlayTextureID) {
+    return;
+  }
+
+  System::Array1<CesiumForUnity::I3dmInstanceRenderer> i3dmRenderers =
+      pCesiumGameObject->pGameObject
+          ->GetComponents<CesiumForUnity::I3dmInstanceRenderer>();
+  if (i3dmRenderers.Length() == 0) {
+    return;
+  }
+
+  for (int32_t primitive = 0,
+               primitiveCount =
+                   static_cast<int32_t>(pCesiumGameObject->primitiveInfos.size());
+       primitive < primitiveCount;
+       ++primitive) {
+    for (int32_t i = 0, len = i3dmRenderers.Length(); i < len; ++i) {
+      i3dmRenderers[i].ClearRasterOverlayTextureForPrimitive(
+          primitive,
+          *maybeOverlayTextureID);
     }
   }
 }

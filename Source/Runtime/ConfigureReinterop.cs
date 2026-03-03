@@ -611,11 +611,14 @@ namespace CesiumForUnity
             double3x3 matrix3x3 = double3x3.identity;
 
             go.GetComponent<I3dmInstanceRenderer>();
+            I3dmInstanceRenderer[] i3dmRenderersOnSelf = go.GetComponents<I3dmInstanceRenderer>();
             I3dmInstanceRenderer[] i3dmRenderers = go.GetComponentsInChildren<I3dmInstanceRenderer>();
             i3dmRenderers = go.GetComponentsInChildren<I3dmInstanceRenderer>(true);
             I3dmInstanceRenderer i3dmRenderer = i3dmRenderers[i3dmRenderers.Length - 1];
             i3dmRenderer = go.AddComponent<I3dmInstanceRenderer>();
-            i3dmRenderer.AddInstanceGroup("groupId",mesh,meshRenderer.material,double4x4List);
+            i3dmRenderer.AddInstanceGroup("groupId", mesh, meshRenderer.material, double4x4List, 0);
+            i3dmRenderer.SetRasterOverlayForPrimitive(0, -1, 0.0f, -1, null, -1, Vector4.zero);
+            i3dmRenderer.ClearRasterOverlayTextureForPrimitive(0, -1);
 
             go.GetComponent<CesiumGlobeAnchor>();
             CesiumGlobeAnchor[] globeAnchors = go.GetComponentsInChildren<CesiumGlobeAnchor>();
