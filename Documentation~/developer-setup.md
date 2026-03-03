@@ -140,7 +140,7 @@ cd c:\cesium\CesiumForUnityBuildProject\Packages
 git clone --recurse-submodules git@github.com:360Fabriek/cesium-unity.git com.cesium.unity
 cd com.cesium.unity
 dotnet publish Reinterop~ -o .
-dotnet run --project Build~
+dotnet run --project Build~ package --unity-version <VERSION> --platform <PLATFORM 1> --platform <PLATFORM 2>
 ```
 
 On success, the built .tar.gz package is found in the root directory of the project (e.g. `c:\cesium\CesiumForUnityBuildProject`).
