@@ -92,6 +92,8 @@ namespace Reinterop
                 
                   {{GetFieldAssignments().JoinAndIndent("  ")}}
 
+                  DotNet::Reinterop::ObjectHandle::startNewAppDomain();
+
                   // Invoke user startup code.
                   start();
 
@@ -118,6 +120,9 @@ namespace Reinterop
 
                 namespace Reinterop
                 {
+                #if UNITY_EDITOR
+                    [UnityEditor.InitializeOnLoad]
+                #endif
                     internal class ReinteropInitializer
                     {
                         public static void Initialize()

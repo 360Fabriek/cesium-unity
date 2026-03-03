@@ -4,7 +4,7 @@
     "references": [
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
-        "CesiumRuntime",
+        "CesiumForUnity",
         "Unity.Mathematics",
         "Unity.Splines"
     ],
@@ -17,7 +17,8 @@
     ],
     "autoReferenced": false,
     "defineConstraints": [
-        "UNITY_INCLUDE_TESTS"
+        "UNITY_INCLUDE_TESTS",
+        "!UNITY_EDITOR_LINUX"
     ],
     "versionDefines": [
         {

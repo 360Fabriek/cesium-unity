@@ -1,4 +1,52 @@
-# Change Log
+# Change Log {#changes}
+
+## v1.23.0 - 2026-03-02
+
+##### Additions :tada:
+
+- Added `CesiumGeoJsonDocumentRasterOverlay`, allowing stylized GeoJSON to be rasterized and draped over terrain and other 3D Tiles.
+- Added `CesiumGeoJsonDocument` to parse and manipulate GeoJSON documents in code.
+- Added `CesiumGeoJsonObject` to access individual features, geometries, and collections within a GeoJSON document.
+- Added `CesiumVectorStyle`, `CesiumVectorLineStyle`, `CesiumVectorPolygonStyle`, and `CesiumVectorPolygonFillStyle` structs for styling vector data.
+
+In addition to the above, this release updates [cesium-native](https://github.com/CesiumGS/cesium-native) from v0.57.0 to v0.58.0. See the [changelog](https://github.com/CesiumGS/cesium-native/blob/main/CHANGES.md) for a complete list of changes in cesium-native.
+
+## v1.22.0 - 2026-02-02
+
+##### Fixes :wrench:
+
+- Fixed a typo in the the name of the `CesiumGoogleMapTilesRasterOverlay.cs` file that prevented users from adding this component to a `GameObject` in more recent versions of Unity.
+
+In addition to the above, this release updates [cesium-native](https://github.com/CesiumGS/cesium-native) from v0.56.0 to v0.57.0. See the [changelog](https://github.com/CesiumGS/cesium-native/blob/main/CHANGES.md) for a complete list of changes in cesium-native.
+
+## v1.21.0 - 2026-01-05
+
+##### Additions :tada:
+
+- Added support for refreshing Cesium ion login tokens after they expire and the refresh token is still valid.
+
+##### Fixes :wrench:
+
+- Setting CesiumGeoreference.ellipsoid at runtime will now correctly update the Georeference and associated transforms.
+- Fixed a bug that could cause `Cesium3DTileset::Update` to be called more than once per frame in the Editor.
+- Further improved stability when Unity reloads the AppDomain, such as when editing scripts or entering Play mode.
+
+In addition to the above, this release updates [cesium-native](https://github.com/CesiumGS/cesium-native) from v0.55.0 to v0.56.0. See the [changelog](https://github.com/CesiumGS/cesium-native/blob/main/CHANGES.md) for a complete list of changes in cesium-native.
+
+## v1.20.0 - 2025-12-01
+
+##### Additions :tada:
+
+- Added experimental support for Web builds.
+
+##### Fixes :wrench:
+
+- Improved stability when Unity reloads the AppDomain, such as when editing scripts or entering Play mode.
+- Fixed incorrect association of the iOS libraries with the iOS platform, which could cause errors when packaging for other platforms.
+- Exceptions thrown by delegates implemented in native code are now correctly propagated back to the managed caller. Previously, this scenario could cause crashes and undefined behavior.
+- Delegate wrappers for native functions now use `SafeHandle` to ensure the native function will not be destroyed by the garbage collector while it is running.
+
+In addition to the above, this release updates [cesium-native](https://github.com/CesiumGS/cesium-native) from v0.53.0 to v0.55.0. See the [changelog](https://github.com/CesiumGS/cesium-native/blob/main/CHANGES.md) for a complete list of changes in cesium-native.
 
 ## v1.19.0 - 2025-11-03
 
