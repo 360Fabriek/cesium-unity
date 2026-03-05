@@ -156,40 +156,41 @@ void Cesium3DTilesetImpl::UpdateInternal(
 
   this->updateLastViewUpdateResultState(tileset, updateResult);
 
-  for (auto pTile : updateResult.tilesFadingOut) {
-    if (pTile->getState() != TileLoadState::Done) {
-      continue;
-    }
+  auto setTileActiveStateIfNeeded =
+      [](const auto& pTile, bool desiredActive) {
+        if (!pTile) {
+          return;
+        }
 
-    const Cesium3DTilesSelection::TileContent& content = pTile->getContent();
-    const Cesium3DTilesSelection::TileRenderContent* pRenderContent =
-        content.getRenderContent();
-    if (pRenderContent) {
-      CesiumGltfGameObject* pCesiumGameObject =
-          static_cast<CesiumGltfGameObject*>(
-              pRenderContent->getRenderResources());
-      if (pCesiumGameObject && pCesiumGameObject->pGameObject) {
-        pCesiumGameObject->pGameObject->SetActive(false);
-      }
-    }
+        if (pTile->getState() != TileLoadState::Done) {
+          return;
+        }
+
+        const Cesium3DTilesSelection::TileContent& content = pTile->getContent();
+        const Cesium3DTilesSelection::TileRenderContent* pRenderContent =
+            content.getRenderContent();
+        if (!pRenderContent) {
+          return;
+        }
+
+        CesiumGltfGameObject* pCesiumGameObject =
+            static_cast<CesiumGltfGameObject*>(
+                pRenderContent->getRenderResources());
+        if (!pCesiumGameObject || !pCesiumGameObject->pGameObject) {
+          return;
+        }
+
+        if (pCesiumGameObject->pGameObject->activeInHierarchy() != desiredActive) {
+          pCesiumGameObject->pGameObject->SetActive(desiredActive);
+        }
+      };
+
+  for (auto pTile : updateResult.tilesFadingOut) {
+    setTileActiveStateIfNeeded(pTile, false);
   }
 
   for (auto pTile : updateResult.tilesToRenderThisFrame) {
-    if (pTile->getState() != TileLoadState::Done) {
-      continue;
-    }
-
-    const Cesium3DTilesSelection::TileContent& content = pTile->getContent();
-    const Cesium3DTilesSelection::TileRenderContent* pRenderContent =
-        content.getRenderContent();
-    if (pRenderContent) {
-      CesiumGltfGameObject* pCesiumGameObject =
-          static_cast<CesiumGltfGameObject*>(
-              pRenderContent->getRenderResources());
-      if (pCesiumGameObject && pCesiumGameObject->pGameObject) {
-        pCesiumGameObject->pGameObject->SetActive(true);
-      }
-    }
+    setTileActiveStateIfNeeded(pTile, true);
   }
 }
 
