@@ -3,6 +3,7 @@
 #include "CameraManager.h"
 #include "CesiumEllipsoidImpl.h"
 #include "CesiumIonServerHelper.h"
+#include "GpuInstancingRasterOverlayTileExcluder.h"
 #include "UnityPrepareRendererResources.h"
 #include "UnityTileExcluderAdaptor.h"
 #include "UnityTilesetExternals.h"
@@ -599,6 +600,8 @@ void Cesium3DTilesetImpl::LoadTileset(
   // options.enableLodTransitionPeriod = tileset.useLodTransitions();
   // options.lodTransitionLength = tileset.lodTransitionLength();
   options.showCreditsOnScreen = tileset.showCreditsOnScreen();
+  options.excluders.push_back(
+      std::make_shared<GpuInstancingRasterOverlayTileExcluder>());
   options.loadErrorCallback =
       [tileset](const TilesetLoadFailureDetails& details) {
         int typeValue = (int)details.type;
