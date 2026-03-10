@@ -3,12 +3,12 @@
 #include "CameraManager.h"
 #include "CesiumEllipsoidImpl.h"
 #include "CesiumIonServerHelper.h"
-#include "GpuInstancingRasterOverlayTileExcluder.h"
 #include "UnityPrepareRendererResources.h"
 #include "UnityTileExcluderAdaptor.h"
 #include "UnityTilesetExternals.h"
 
 #include <Cesium3DTilesSelection/EllipsoidTilesetLoader.h>
+#include <Cesium3DTilesSelection/TileContent.h>
 #include <Cesium3DTilesSelection/Tileset.h>
 #include <CesiumGeospatial/GlobeTransforms.h>
 #include <CesiumIonClient/Connection.h>
@@ -25,6 +25,7 @@
 #include <DotNet/CesiumForUnity/CesiumRasterOverlay.h>
 #include <DotNet/CesiumForUnity/CesiumSampleHeightResult.h>
 #include <DotNet/CesiumForUnity/CesiumTileExcluder.h>
+#include <DotNet/CesiumForUnity/I3dmInstanceRenderer.h>
 #include <DotNet/System/Exception.h>
 #include <DotNet/System/Object.h>
 #include <DotNet/System/String.h>
@@ -46,6 +47,8 @@
 #include <DotNet/UnityEngine/Transform.h>
 #include <DotNet/UnityEngine/Vector3.h>
 
+#include <string>
+#include <unordered_set>
 #include <variant>
 
 #if UNITY_EDITOR
@@ -59,6 +62,102 @@ using namespace Cesium3DTilesSelection;
 using namespace DotNet;
 
 namespace CesiumForUnityNative {
+namespace {
+
+const TileRenderContent* getRenderContent(const Tile* pTile) {
+  if (!pTile || pTile->getState() != TileLoadState::Done) {
+    return nullptr;
+  }
+
+  return pTile->getContent().getRenderContent();
+}
+
+CesiumGltfGameObject* getTileGameObject(const Tile* pTile) {
+  const TileRenderContent* pRenderContent = getRenderContent(pTile);
+  if (!pRenderContent) {
+    return nullptr;
+  }
+
+  CesiumGltfGameObject* pCesiumGameObject =
+      static_cast<CesiumGltfGameObject*>(pRenderContent->getRenderResources());
+  if (!pCesiumGameObject || !pCesiumGameObject->pGameObject) {
+    return nullptr;
+  }
+
+  return pCesiumGameObject;
+}
+
+bool hasI3dmInstanceRenderer(const Tile* pTile) {
+  CesiumGltfGameObject* pCesiumGameObject = getTileGameObject(pTile);
+  if (!pCesiumGameObject) {
+    return false;
+  }
+
+  return pCesiumGameObject->pGameObject
+             ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>() != nullptr;
+}
+
+std::string getTileUrl(const Tile* pTile) {
+  const TileRenderContent* pRenderContent = getRenderContent(pTile);
+  if (!pRenderContent) {
+    return std::string();
+  }
+
+  const auto urlIt =
+      pRenderContent->getModel().extras.find("Cesium3DTiles_TileUrl");
+  if (urlIt == pRenderContent->getModel().extras.end()) {
+    return std::string();
+  }
+
+  return urlIt->second.getStringOrDefault("");
+}
+
+std::string getBaseTileUrl(const Tile* pTile) {
+  std::string url = getTileUrl(pTile);
+  const std::string::size_type upsampledIndex = url.find(" upsampled");
+  if (upsampledIndex != std::string::npos) {
+    url.resize(upsampledIndex);
+  }
+
+  return url;
+}
+
+const Tile* resolveActivationTile(const Tile* pTile) {
+  if (!pTile || !std::holds_alternative<CesiumGeometry::UpsampledQuadtreeNode>(
+                    pTile->getTileID())) {
+    return pTile;
+  }
+
+  const std::string selectedBaseUrl = getBaseTileUrl(pTile);
+  if (selectedBaseUrl.empty()) {
+    return pTile;
+  }
+
+  const Tile* pAncestor = pTile->getParent();
+  while (pAncestor) {
+    if (hasI3dmInstanceRenderer(pAncestor) &&
+        getBaseTileUrl(pAncestor) == selectedBaseUrl) {
+      return pAncestor;
+    }
+
+    pAncestor = pAncestor->getParent();
+  }
+
+  return pTile;
+}
+
+void setTileActiveStateIfNeeded(const Tile* pTile, bool desiredActive) {
+  CesiumGltfGameObject* pCesiumGameObject = getTileGameObject(pTile);
+  if (!pCesiumGameObject) {
+    return;
+  }
+
+  if (pCesiumGameObject->pGameObject->activeInHierarchy() != desiredActive) {
+    pCesiumGameObject->pGameObject->SetActive(desiredActive);
+  }
+}
+
+} // namespace
 
 Cesium3DTilesetImpl::Cesium3DTilesetImpl(
     const DotNet::CesiumForUnity::Cesium3DTileset& tileset)
@@ -157,40 +256,20 @@ void Cesium3DTilesetImpl::UpdateInternal(
 
   this->updateLastViewUpdateResultState(tileset, updateResult);
 
-  auto setTileActiveStateIfNeeded =
-      [](const auto& pTile, bool desiredActive) {
-        if (!pTile) {
-          return;
-        }
-
-        if (pTile->getState() != TileLoadState::Done) {
-          return;
-        }
-
-        const Cesium3DTilesSelection::TileContent& content = pTile->getContent();
-        const Cesium3DTilesSelection::TileRenderContent* pRenderContent =
-            content.getRenderContent();
-        if (!pRenderContent) {
-          return;
-        }
-
-        CesiumGltfGameObject* pCesiumGameObject =
-            static_cast<CesiumGltfGameObject*>(
-                pRenderContent->getRenderResources());
-        if (!pCesiumGameObject || !pCesiumGameObject->pGameObject) {
-          return;
-        }
-
-        if (pCesiumGameObject->pGameObject->activeInHierarchy() != desiredActive) {
-          pCesiumGameObject->pGameObject->SetActive(desiredActive);
-        }
-      };
+  std::unordered_set<Tile::ConstPointer> tilesToActivate;
+  tilesToActivate.reserve(updateResult.tilesToRenderThisFrame.size());
+  for (Tile::ConstPointer pTile : updateResult.tilesToRenderThisFrame) {
+    tilesToActivate.insert(resolveActivationTile(pTile));
+  }
 
   for (auto pTile : updateResult.tilesFadingOut) {
+    if (tilesToActivate.find(pTile) != tilesToActivate.end()) {
+      continue;
+    }
     setTileActiveStateIfNeeded(pTile, false);
   }
 
-  for (auto pTile : updateResult.tilesToRenderThisFrame) {
+  for (Tile::ConstPointer pTile : tilesToActivate) {
     setTileActiveStateIfNeeded(pTile, true);
   }
 }
@@ -600,8 +679,6 @@ void Cesium3DTilesetImpl::LoadTileset(
   // options.enableLodTransitionPeriod = tileset.useLodTransitions();
   // options.lodTransitionLength = tileset.lodTransitionLength();
   options.showCreditsOnScreen = tileset.showCreditsOnScreen();
-  options.excluders.push_back(
-      std::make_shared<GpuInstancingRasterOverlayTileExcluder>());
   options.loadErrorCallback =
       [tileset](const TilesetLoadFailureDetails& details) {
         int typeValue = (int)details.type;

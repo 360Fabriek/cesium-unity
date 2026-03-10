@@ -2160,6 +2160,13 @@ void* UnityPrepareRendererResources::prepareInMainThread(
     return nullptr;
   }
 
+  // Newly-created instanced tiles may miss the current frame's activation pass
+  // because tile selection happens before main-thread resource creation.
+  if (pModelGameObject->GetComponent<CesiumForUnity::I3dmInstanceRenderer>() !=
+      nullptr) {
+    pModelGameObject->SetActive(true);
+  }
+
   tilesetComponent.BroadcastNewGameObjectCreated(*pModelGameObject);
 
   CesiumGltfGameObject* pCesiumGameObject = new CesiumGltfGameObject{
