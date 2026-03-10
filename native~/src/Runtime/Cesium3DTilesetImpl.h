@@ -12,6 +12,7 @@
 #include <DotNet/System/Threading/Tasks/Task1.h>
 
 #include <memory>
+#include <unordered_set>
 
 #if UNITY_EDITOR
 #include <DotNet/UnityEditor/CallbackFunction.h>
@@ -28,6 +29,7 @@ struct double3;
 }
 
 namespace Cesium3DTilesSelection {
+class Tile;
 class Tileset;
 }
 
@@ -97,6 +99,7 @@ private:
 
   std::unique_ptr<Cesium3DTilesSelection::Tileset> _pTileset;
   Cesium3DTilesSelection::ViewUpdateResult _lastUpdateResult;
+  std::unordered_set<Cesium3DTilesSelection::Tile::ConstPointer> _activeTiles;
 #if UNITY_EDITOR
   DotNet::UnityEditor::CallbackFunction _updateInEditorCallback;
 #endif

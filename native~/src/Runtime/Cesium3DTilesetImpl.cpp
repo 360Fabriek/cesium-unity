@@ -163,6 +163,7 @@ Cesium3DTilesetImpl::Cesium3DTilesetImpl(
     const DotNet::CesiumForUnity::Cesium3DTileset& tileset)
     : _pTileset(),
       _lastUpdateResult(),
+      _activeTiles(),
 #if UNITY_EDITOR
       _updateInEditorCallback(nullptr),
 #endif
@@ -262,7 +263,7 @@ void Cesium3DTilesetImpl::UpdateInternal(
     tilesToActivate.insert(resolveActivationTile(pTile));
   }
 
-  for (auto pTile : updateResult.tilesFadingOut) {
+  for (Tile::ConstPointer pTile : this->_activeTiles) {
     if (tilesToActivate.find(pTile) != tilesToActivate.end()) {
       continue;
     }
@@ -272,6 +273,8 @@ void Cesium3DTilesetImpl::UpdateInternal(
   for (Tile::ConstPointer pTile : tilesToActivate) {
     setTileActiveStateIfNeeded(pTile, true);
   }
+
+  this->_activeTiles = std::move(tilesToActivate);
 }
 
 void Cesium3DTilesetImpl::OnValidate(
@@ -656,6 +659,7 @@ void Cesium3DTilesetImpl::DestroyTileset(
   }
 
   this->_pTileset.reset();
+  this->_activeTiles.clear();
 
   this->_destroyTilesetOnNextUpdate = false;
 }
@@ -774,6 +778,7 @@ void Cesium3DTilesetImpl::LoadTileset(
   this->setCameraManager(cameraManager);
 
   this->_lastUpdateResult = ViewUpdateResult();
+  this->_activeTiles.clear();
 
   if (tileset.tilesetSource() ==
       CesiumForUnity::CesiumDataSource::FromCesiumIon) {
