@@ -63,6 +63,13 @@ namespace CesiumForUnity
             public double maxLatitude;
         }
 
+        private struct TileSelectionBounds
+        {
+            public LongitudeInterval longitudeInterval;
+            public double minLatitude;
+            public double maxLatitude;
+        }
+
         private const int UnityMaxBatchSize = 1023;
         private static readonly int ClippingOverlayTexturePropertyId =
             Shader.PropertyToID("_overlayTexture_Clipping");
@@ -80,6 +87,7 @@ namespace CesiumForUnity
         private bool _georeferenceChanged = true;
         private int _clipSourceFingerprint;
         private readonly List<CachedPolygon> _cachedPolygons = new List<CachedPolygon>();
+        private readonly List<TileSelectionBounds> _tileSelectionBounds = new List<TileSelectionBounds>();
         private LongitudeInterval _unionLongitudeInterval;
         private double _unionMinLatitude;
         private double _unionMaxLatitude;
@@ -190,7 +198,25 @@ namespace CesiumForUnity
                     continue;
                 }
 
-                if (clipByPolygon && this._hasBounds && !MightIntersectClippingBounds(matrix))
+                bool requiresLongitudeLatitude =
+                    (clipByPolygon && this._hasBounds) ||
+                    this._tileSelectionBounds.Count > 0;
+                double2 longitudeLatitude = default;
+                bool hasLongitudeLatitude =
+                    !requiresLongitudeLatitude ||
+                    TryGetInstanceLongitudeLatitude(matrix, out longitudeLatitude);
+
+                if (clipByPolygon &&
+                    this._hasBounds &&
+                    (!hasLongitudeLatitude ||
+                     !MightIntersectClippingBounds(longitudeLatitude)))
+                {
+                    continue;
+                }
+
+                if (this._tileSelectionBounds.Count > 0 &&
+                    (!hasLongitudeLatitude ||
+                     !IsPointWithinAnyTileSelectionBounds(longitudeLatitude)))
                 {
                     continue;
                 }
@@ -273,6 +299,31 @@ namespace CesiumForUnity
             EnsureMaterialInstancing(groupData.material);
 
             _instanceGroups[groupId] = groupData;
+        }
+
+        public void ClearTileSelectionBounds()
+        {
+            this._tileSelectionBounds.Clear();
+        }
+
+        public void AddTileSelectionBounds(
+            double west,
+            double south,
+            double east,
+            double north,
+            bool wrapsLongitude)
+        {
+            this._tileSelectionBounds.Add(new TileSelectionBounds
+            {
+                longitudeInterval = new LongitudeInterval
+                {
+                    min = NormalizeLongitude360(west),
+                    max = NormalizeLongitude360(east),
+                    wraps = wrapsLongitude
+                },
+                minLatitude = south,
+                maxLatitude = north
+            });
         }
 
         public void SetInstanceGroupFloat(string groupId, int propertyId, float value)
@@ -788,18 +839,8 @@ namespace CesiumForUnity
             return true;
         }
 
-        private bool MightIntersectClippingBounds(Matrix4x4 worldMatrix)
+        private bool MightIntersectClippingBounds(double2 longitudeLatitude)
         {
-            if (!this._hasBounds)
-            {
-                return true;
-            }
-
-            if (!TryGetInstanceLongitudeLatitude(worldMatrix, out double2 longitudeLatitude))
-            {
-                return true;
-            }
-
             if (longitudeLatitude.y < this._unionMinLatitude ||
                 longitudeLatitude.y > this._unionMaxLatitude)
             {
@@ -820,6 +861,25 @@ namespace CesiumForUnity
                     polygon.longitudeInterval,
                     polygon.minLatitude,
                     polygon.maxLatitude))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsPointWithinAnyTileSelectionBounds(double2 longitudeLatitude)
+        {
+            for (int i = 0; i < this._tileSelectionBounds.Count; ++i)
+            {
+                TileSelectionBounds bounds = this._tileSelectionBounds[i];
+                if (IsPointWithinBounds(
+                    longitudeLatitude.x,
+                    longitudeLatitude.y,
+                    bounds.longitudeInterval,
+                    bounds.minLatitude,
+                    bounds.maxLatitude))
                 {
                     return true;
                 }

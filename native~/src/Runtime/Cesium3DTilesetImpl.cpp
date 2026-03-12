@@ -7,12 +7,14 @@
 #include "UnityTileExcluderAdaptor.h"
 #include "UnityTilesetExternals.h"
 
+#include <Cesium3DTilesSelection/BoundingVolume.h>
 #include <Cesium3DTilesSelection/EllipsoidTilesetLoader.h>
 #include <Cesium3DTilesSelection/TileContent.h>
 #include <Cesium3DTilesSelection/Tileset.h>
 #include <CesiumGeospatial/GlobeTransforms.h>
 #include <CesiumIonClient/Connection.h>
 #include <CesiumRasterOverlays/IonRasterOverlay.h>
+#include <CesiumUtility/Math.h>
 
 #include <DotNet/CesiumForUnity/Cesium3DTileset.h>
 #include <DotNet/CesiumForUnity/Cesium3DTilesetLoadFailureDetails.h>
@@ -48,6 +50,7 @@
 #include <DotNet/UnityEngine/Vector3.h>
 
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <variant>
 
@@ -65,10 +68,14 @@ namespace CesiumForUnityNative {
 namespace {
 
 const TileRenderContent* getRenderContent(const Tile* pTile) {
-  if (!pTile || pTile->getState() != TileLoadState::Done) {
+  if (!pTile) {
     return nullptr;
   }
 
+  // A tile may leave the Done state before its Unity render resources are
+  // actually freed on the main thread. We still need access to those resources
+  // so they can be deactivated immediately when the tile drops out of the
+  // selected set.
   return pTile->getContent().getRenderContent();
 }
 
@@ -95,6 +102,16 @@ bool hasI3dmInstanceRenderer(const Tile* pTile) {
 
   return pCesiumGameObject->pGameObject
              ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>() != nullptr;
+}
+
+CesiumForUnity::I3dmInstanceRenderer getI3dmInstanceRenderer(const Tile* pTile) {
+  CesiumGltfGameObject* pCesiumGameObject = getTileGameObject(pTile);
+  if (!pCesiumGameObject) {
+    return nullptr;
+  }
+
+  return pCesiumGameObject->pGameObject
+      ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>();
 }
 
 std::string getTileUrl(const Tile* pTile) {
@@ -144,6 +161,59 @@ const Tile* resolveActivationTile(const Tile* pTile) {
   }
 
   return pTile;
+}
+
+struct TileSelectionBounds {
+  double west;
+  double south;
+  double east;
+  double north;
+  bool wrapsLongitude;
+};
+
+std::optional<TileSelectionBounds>
+getTileSelectionBounds(const Tile& tile) {
+  std::optional<CesiumGeospatial::GlobeRectangle> globeRectangle =
+      estimateGlobeRectangle(tile.getBoundingVolume());
+  if (!globeRectangle) {
+    return std::nullopt;
+  }
+
+  return TileSelectionBounds{
+      CesiumUtility::Math::radiansToDegrees(globeRectangle->getWest()),
+      CesiumUtility::Math::radiansToDegrees(globeRectangle->getSouth()),
+      CesiumUtility::Math::radiansToDegrees(globeRectangle->getEast()),
+      CesiumUtility::Math::radiansToDegrees(globeRectangle->getNorth()),
+      globeRectangle->getEast() < globeRectangle->getWest()};
+}
+
+void updateI3dmTileSelectionBounds(
+    const std::unordered_set<Tile::ConstPointer>& tilesToActivate,
+    const std::unordered_map<const Tile*, std::vector<TileSelectionBounds>>&
+        forwardedBoundsByTile) {
+  for (Tile::ConstPointer pTile : tilesToActivate) {
+    CesiumForUnity::I3dmInstanceRenderer renderer =
+        getI3dmInstanceRenderer(pTile);
+    if (renderer == nullptr) {
+      continue;
+    }
+
+    renderer.ClearTileSelectionBounds();
+
+    auto boundsIt = forwardedBoundsByTile.find(pTile);
+    if (boundsIt == forwardedBoundsByTile.end()) {
+      continue;
+    }
+
+    for (const TileSelectionBounds& bounds : boundsIt->second) {
+      renderer.AddTileSelectionBounds(
+          bounds.west,
+          bounds.south,
+          bounds.east,
+          bounds.north,
+          bounds.wrapsLongitude);
+    }
+  }
 }
 
 void setTileActiveStateIfNeeded(const Tile* pTile, bool desiredActive) {
@@ -258,10 +328,22 @@ void Cesium3DTilesetImpl::UpdateInternal(
   this->updateLastViewUpdateResultState(tileset, updateResult);
 
   std::unordered_set<Tile::ConstPointer> tilesToActivate;
+  std::unordered_map<const Tile*, std::vector<TileSelectionBounds>>
+      forwardedBoundsByTile;
   tilesToActivate.reserve(updateResult.tilesToRenderThisFrame.size());
   for (Tile::ConstPointer pTile : updateResult.tilesToRenderThisFrame) {
-    tilesToActivate.insert(resolveActivationTile(pTile));
+    const Tile* pActivationTile = resolveActivationTile(pTile);
+    tilesToActivate.insert(pActivationTile);
+
+    if (pActivationTile != pTile) {
+      std::optional<TileSelectionBounds> bounds = getTileSelectionBounds(*pTile);
+      if (bounds) {
+        forwardedBoundsByTile[pActivationTile].emplace_back(*bounds);
+      }
+    }
   }
+
+  updateI3dmTileSelectionBounds(tilesToActivate, forwardedBoundsByTile);
 
   for (Tile::ConstPointer pTile : this->_activeTiles) {
     if (tilesToActivate.find(pTile) != tilesToActivate.end()) {

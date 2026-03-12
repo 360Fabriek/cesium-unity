@@ -619,6 +619,8 @@ namespace CesiumForUnity
             i3dmRenderer.AddInstanceGroup("groupId", mesh, meshRenderer.material, double4x4List, 0);
             i3dmRenderer.SetRasterOverlayForPrimitive(0, -1, 0.0f, -1, null, -1, Vector4.zero);
             i3dmRenderer.ClearRasterOverlayTextureForPrimitive(0, -1);
+            i3dmRenderer.ClearTileSelectionBounds();
+            i3dmRenderer.AddTileSelectionBounds(0.0, 0.0, 1.0, 1.0, false);
 
             go.GetComponent<CesiumGlobeAnchor>();
             CesiumGlobeAnchor[] globeAnchors = go.GetComponentsInChildren<CesiumGlobeAnchor>();
