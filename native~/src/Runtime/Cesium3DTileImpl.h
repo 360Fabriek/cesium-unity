@@ -1,5 +1,7 @@
 #pragma once
 
+#include <DotNet/System/String.h>
+
 namespace DotNet::Unity::Mathematics {
 struct double4x4;
 }
@@ -16,6 +18,8 @@ public:
       void* pTileVoid,
       void* pTileEllipsoidVoid,
       const DotNet::Unity::Mathematics::double4x4& ecefToLocalMatrix);
+  static DotNet::System::String getTileId(void* pTileVoid);
+  static DotNet::System::String getContentUrl(void* pTileVoid);
 };
 
 } // namespace CesiumForUnityNative

@@ -3,8 +3,10 @@
 #include "UnityTransforms.h"
 
 #include <Cesium3DTilesSelection/Tile.h>
+#include <Cesium3DTilesSelection/TileID.h>
 #include <CesiumGeospatial/Ellipsoid.h>
 
+#include <DotNet/System/String.h>
 #include <DotNet/Unity/Mathematics/double4x4.h>
 #include <DotNet/UnityEngine/Bounds.h>
 
@@ -32,6 +34,18 @@ DotNet::UnityEngine::Bounds Cesium3DTileImpl::getBounds(
           float(aabb.lengthX),
           float(aabb.lengthY),
           float(aabb.lengthZ)});
+}
+
+DotNet::System::String Cesium3DTileImpl::getTileId(void* pTileVoid) {
+  const Tile* pTile = static_cast<const Tile*>(pTileVoid);
+  return DotNet::System::String(
+      TileIdUtilities::createTileIdString(pTile->getTileID()));
+}
+
+DotNet::System::String Cesium3DTileImpl::getContentUrl(void* pTileVoid) {
+  const Tile* pTile = static_cast<const Tile*>(pTileVoid);
+  const std::string* pUrl = std::get_if<std::string>(&pTile->getTileID());
+  return DotNet::System::String(pUrl ? *pUrl : std::string());
 }
 
 } // namespace CesiumForUnityNative

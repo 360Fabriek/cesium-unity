@@ -27,6 +27,7 @@
 #include <DotNet/CesiumForUnity/CesiumRasterOverlay.h>
 #include <DotNet/CesiumForUnity/CesiumSampleHeightResult.h>
 #include <DotNet/CesiumForUnity/CesiumTileExcluder.h>
+#include <DotNet/Reinterop/ReinteropNativeException.h>
 #include <DotNet/CesiumForUnity/I3dmInstanceRenderer.h>
 #include <DotNet/System/Exception.h>
 #include <DotNet/System/Object.h>
@@ -382,7 +383,17 @@ void Cesium3DTilesetImpl::OnEnable(
   if (UnityEngine::Application::isEditor() &&
       !UnityEditor::EditorApplication::isPlaying()) {
     this->_updateInEditorCallback = UnityEditor::CallbackFunction(
-        [this, tileset]() { this->UpdateInternal(tileset); });
+        [this, tileset]() {
+          try {
+            this->UpdateInternal(tileset);
+          } catch (const Reinterop::ReinteropNativeException& e) {
+            UnityEngine::Debug::LogWarning(System::String(
+                "Stopping Cesium editor updates after a managed exception in "
+                "the update callback: " +
+                e.GetDotNetException().Message().ToStlString()));
+            this->removeUpdateInEditorCallback();
+          }
+        });
     UnityEditor::EditorApplication::update(
         UnityEditor::EditorApplication::update() +
         this->_updateInEditorCallback);
@@ -393,13 +404,7 @@ void Cesium3DTilesetImpl::OnEnable(
 void Cesium3DTilesetImpl::OnDisable(
     const DotNet::CesiumForUnity::Cesium3DTileset& tileset) {
 #if UNITY_EDITOR
-  if (this->_updateInEditorCallback != nullptr) {
-    UnityEditor::EditorApplication::update(
-        UnityEditor::EditorApplication::update() -
-        this->_updateInEditorCallback);
-    this->_updateInEditorCallback.Dispose();
-    this->_updateInEditorCallback = nullptr;
-  }
+  this->removeUpdateInEditorCallback();
 #endif
 
   this->_creditSystem = nullptr;
@@ -745,6 +750,19 @@ void Cesium3DTilesetImpl::DestroyTileset(
 
   this->_destroyTilesetOnNextUpdate = false;
 }
+
+#if UNITY_EDITOR
+void Cesium3DTilesetImpl::removeUpdateInEditorCallback() {
+  if (this->_updateInEditorCallback == nullptr) {
+    return;
+  }
+
+  UnityEditor::EditorApplication::update(
+      UnityEditor::EditorApplication::update() - this->_updateInEditorCallback);
+  this->_updateInEditorCallback.Dispose();
+  this->_updateInEditorCallback = nullptr;
+}
+#endif
 
 void Cesium3DTilesetImpl::LoadTileset(
     const DotNet::CesiumForUnity::Cesium3DTileset& tileset) {

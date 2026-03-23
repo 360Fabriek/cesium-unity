@@ -96,6 +96,9 @@ private:
   void updateLastViewUpdateResultState(
       const DotNet::CesiumForUnity::Cesium3DTileset& tileset,
       const Cesium3DTilesSelection::ViewUpdateResult& currentResult);
+#if UNITY_EDITOR
+  void removeUpdateInEditorCallback();
+#endif
 
   std::unique_ptr<Cesium3DTilesSelection::Tileset> _pTileset;
   Cesium3DTilesSelection::ViewUpdateResult _lastUpdateResult;
