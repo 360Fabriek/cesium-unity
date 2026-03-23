@@ -65,6 +65,7 @@
 #include <DotNet/UnityEngine/Rendering/SubMeshDescriptor.h>
 #include <DotNet/UnityEngine/Rendering/VertexAttributeDescriptor.h>
 #include <DotNet/UnityEngine/Resources.h>
+#include <DotNet/UnityEngine/Shader.h>
 #include <DotNet/UnityEngine/Texture.h>
 #include <DotNet/UnityEngine/TextureWrapMode.h>
 #include <DotNet/UnityEngine/Transform.h>
@@ -1143,6 +1144,87 @@ gltfVectorToUnityVector(const std::vector<double>& values, float defaultValue) {
   return result;
 }
 
+void applyAlphaMode(
+    const CesiumGltf::Material& gltfMaterial,
+    const UnityEngine::Material& unityMaterial) {
+  static const int32_t alphaClipId =
+      UnityEngine::Shader::PropertyToID(System::String("_AlphaClip"));
+  static const int32_t alphaCutoffEnableId =
+      UnityEngine::Shader::PropertyToID(System::String("_AlphaCutoffEnable"));
+  static const int32_t builtinAlphaClipId =
+      UnityEngine::Shader::PropertyToID(System::String("_BUILTIN_AlphaClip"));
+  static const int32_t surfaceId =
+      UnityEngine::Shader::PropertyToID(System::String("_Surface"));
+  static const int32_t surfaceTypeId =
+      UnityEngine::Shader::PropertyToID(System::String("_SurfaceType"));
+  static const int32_t builtinSurfaceId =
+      UnityEngine::Shader::PropertyToID(System::String("_BUILTIN_Surface"));
+  static const int32_t blendId =
+      UnityEngine::Shader::PropertyToID(System::String("_Blend"));
+  static const int32_t builtinBlendId =
+      UnityEngine::Shader::PropertyToID(System::String("_BUILTIN_Blend"));
+  static const int32_t srcBlendId =
+      UnityEngine::Shader::PropertyToID(System::String("_SrcBlend"));
+  static const int32_t dstBlendId =
+      UnityEngine::Shader::PropertyToID(System::String("_DstBlend"));
+  static const int32_t builtinSrcBlendId =
+      UnityEngine::Shader::PropertyToID(System::String("_BUILTIN_SrcBlend"));
+  static const int32_t builtinDstBlendId =
+      UnityEngine::Shader::PropertyToID(System::String("_BUILTIN_DstBlend"));
+  static const int32_t zWriteId =
+      UnityEngine::Shader::PropertyToID(System::String("_ZWrite"));
+  static const int32_t builtinZWriteId =
+      UnityEngine::Shader::PropertyToID(System::String("_BUILTIN_ZWrite"));
+  static const int32_t transparentZWriteId =
+      UnityEngine::Shader::PropertyToID(System::String("_TransparentZWrite"));
+
+  const bool isBlend =
+      gltfMaterial.alphaMode == CesiumGltf::Material::AlphaMode::BLEND;
+  const bool isMask =
+      gltfMaterial.alphaMode == CesiumGltf::Material::AlphaMode::MASK;
+
+  unityMaterial.DisableKeyword(System::String("_ALPHATEST_ON"));
+  unityMaterial.DisableKeyword(System::String("_SURFACE_TYPE_TRANSPARENT"));
+
+  if (isBlend) {
+    unityMaterial.SetFloat(alphaClipId, 0.0f);
+    unityMaterial.SetFloat(alphaCutoffEnableId, 0.0f);
+    unityMaterial.SetFloat(builtinAlphaClipId, 0.0f);
+    unityMaterial.SetFloat(surfaceId, 1.0f);
+    unityMaterial.SetFloat(surfaceTypeId, 1.0f);
+    unityMaterial.SetFloat(builtinSurfaceId, 1.0f);
+    unityMaterial.SetFloat(blendId, 0.0f);
+    unityMaterial.SetFloat(builtinBlendId, 0.0f);
+    unityMaterial.SetFloat(srcBlendId, 5.0f);
+    unityMaterial.SetFloat(dstBlendId, 10.0f);
+    unityMaterial.SetFloat(builtinSrcBlendId, 5.0f);
+    unityMaterial.SetFloat(builtinDstBlendId, 10.0f);
+    unityMaterial.SetFloat(zWriteId, 0.0f);
+    unityMaterial.SetFloat(builtinZWriteId, 0.0f);
+    unityMaterial.SetFloat(transparentZWriteId, 0.0f);
+    unityMaterial.EnableKeyword(System::String("_SURFACE_TYPE_TRANSPARENT"));
+  } else {
+    unityMaterial.SetFloat(alphaClipId, isMask ? 1.0f : 0.0f);
+    unityMaterial.SetFloat(alphaCutoffEnableId, isMask ? 1.0f : 0.0f);
+    unityMaterial.SetFloat(builtinAlphaClipId, isMask ? 1.0f : 0.0f);
+    unityMaterial.SetFloat(surfaceId, 0.0f);
+    unityMaterial.SetFloat(surfaceTypeId, 0.0f);
+    unityMaterial.SetFloat(builtinSurfaceId, 0.0f);
+    unityMaterial.SetFloat(blendId, 0.0f);
+    unityMaterial.SetFloat(builtinBlendId, 0.0f);
+    unityMaterial.SetFloat(srcBlendId, 1.0f);
+    unityMaterial.SetFloat(dstBlendId, 0.0f);
+    unityMaterial.SetFloat(builtinSrcBlendId, 1.0f);
+    unityMaterial.SetFloat(builtinDstBlendId, 0.0f);
+    unityMaterial.SetFloat(zWriteId, 1.0f);
+    unityMaterial.SetFloat(builtinZWriteId, 1.0f);
+    unityMaterial.SetFloat(transparentZWriteId, 0.0f);
+    if (isMask) {
+      unityMaterial.EnableKeyword(System::String("_ALPHATEST_ON"));
+    }
+  }
+}
+
 void setGltfMaterialParameterValues(
     const CesiumGltf::Model& model,
     const CesiumPrimitiveInfo& primitiveInfo,
@@ -1182,6 +1264,8 @@ void setGltfMaterialParameterValues(
       gltfMaterial.pbrMetallicRoughness
           ? gltfMaterial.pbrMetallicRoughness.value()
           : defaultPbrMetallicRoughness;
+
+  applyAlphaMode(gltfMaterial, unityMaterial);
 
   // Add base color factor and metallic-roughness factor regardless
   // of whether the textures are present.

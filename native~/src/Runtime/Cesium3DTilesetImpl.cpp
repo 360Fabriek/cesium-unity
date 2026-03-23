@@ -112,7 +112,36 @@ CesiumForUnity::I3dmInstanceRenderer getI3dmInstanceRenderer(const Tile* pTile) 
   }
 
   return pCesiumGameObject->pGameObject
-      ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>();
+             ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>();
+}
+
+bool isImplicitPlaceholderTile(const Tile& tile) {
+  if (!tile.isExternalContent() || tile.getUnconditionallyRefine()) {
+    return false;
+  }
+
+  std::span<const Tile> children = tile.getChildren();
+  if (children.size() != 1) {
+    return false;
+  }
+
+  const TileID& childId = children.front().getTileID();
+  return std::holds_alternative<CesiumGeometry::QuadtreeTileID>(childId) ||
+         std::holds_alternative<CesiumGeometry::OctreeTileID>(childId);
+}
+
+void markImplicitPlaceholderTiles(Tile* pTile) {
+  if (pTile == nullptr) {
+    return;
+  }
+
+  if (isImplicitPlaceholderTile(*pTile)) {
+    pTile->setUnconditionallyRefine();
+  }
+
+  for (Tile& child : pTile->getChildren()) {
+    markImplicitPlaceholderTiles(&child);
+  }
 }
 
 std::string getTileUrl(const Tile* pTile) {
@@ -916,6 +945,11 @@ void Cesium3DTilesetImpl::LoadTileset(
         createTilesetExternals(tileset),
         tileset.url().ToStlString(),
         options);
+  }
+
+  if (this->_pTileset) {
+    markImplicitPlaceholderTiles(
+        const_cast<Tile*>(this->_pTileset->getRootTile()));
   }
 
   // Add any overlay components.
