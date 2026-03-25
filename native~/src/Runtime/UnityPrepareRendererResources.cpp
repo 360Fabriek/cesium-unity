@@ -11,7 +11,10 @@
 #include <CesiumGeometry/Transforms.h>
 #include <CesiumGeospatial/Ellipsoid.h>
 #include <CesiumGltf/AccessorView.h>
+#include <CesiumGltf/AccessorUtility.h>
+#include <CesiumGltf/ExtensionExtInstanceFeatures.h>
 #include <CesiumGltf/ExtensionExtMeshFeatures.h>
+#include <CesiumGltf/ExtensionExtMeshGpuInstancing.h>
 #include <CesiumGltf/ExtensionKhrMaterialsUnlit.h>
 #include <CesiumGltf/ExtensionKhrTextureTransform.h>
 #include <CesiumGltf/ExtensionModelExtStructuralMetadata.h>
@@ -30,9 +33,11 @@
 #include <DotNet/CesiumForUnity/CesiumModelMetadata.h>
 #include <DotNet/CesiumForUnity/CesiumObjectPool1.h>
 #include <DotNet/CesiumForUnity/CesiumObjectPools.h>
+#include <DotNet/CesiumForUnity/InstancedTileRenderer.h>
 #include <DotNet/CesiumForUnity/CesiumPointCloudRenderer.h>
 #include <DotNet/CesiumForUnity/CesiumPrimitiveFeatures.h>
 #include <DotNet/CesiumForUnity/CesiumPropertyTable.h>
+#include <DotNet/CesiumForUnity/CesiumRasterOverlay.h>
 #include <DotNet/System/Array1.h>
 #include <DotNet/System/Collections/Generic/List1.h>
 #include <DotNet/System/Object.h>
@@ -69,6 +74,7 @@
 #include <DotNet/UnityEngine/Vector3.h>
 #include <DotNet/UnityEngine/Vector4.h>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
@@ -136,6 +142,199 @@ struct MeshDataResult {
   UnityEngine::MeshDataArray meshDataArray;
   std::vector<CesiumPrimitiveInfo> primitiveInfos;
 };
+
+template <typename TAccessor> int64_t getAccessorCount(const TAccessor& accessor) {
+  return std::visit(CesiumGltf::CountFromAccessor{}, accessor);
+}
+
+template <typename TAccessor>
+CesiumGltf::AccessorViewStatus getAccessorStatus(const TAccessor& accessor) {
+  return std::visit(CesiumGltf::StatusFromAccessor{}, accessor);
+}
+
+glm::dvec3 identityTranslation() { return glm::dvec3(0.0); }
+
+glm::dvec3 identityScale() { return glm::dvec3(1.0); }
+
+template <typename TView> glm::dvec3 getVec3Value(const TView& view, int64_t index) {
+  if (view.status() != AccessorViewStatus::Valid || index < 0 || index >= view.size()) {
+    return glm::dvec3(0.0);
+  }
+
+  return glm::dvec3(
+      view[index].value[0],
+      view[index].value[1],
+      view[index].value[2]);
+}
+
+struct QuaternionFromAccessor {
+  int64_t index;
+
+  template <typename TView> glm::dquat operator()(const TView& view) const {
+    if (view.status() != AccessorViewStatus::Valid || index < 0 ||
+        index >= view.size()) {
+      return glm::dquat(1.0, 0.0, 0.0, 0.0);
+    }
+
+    auto value = view[index];
+    glm::dquat quaternion(
+        static_cast<double>(value.value[3]),
+        static_cast<double>(value.value[0]),
+        static_cast<double>(value.value[1]),
+        static_cast<double>(value.value[2]));
+
+    double length = glm::length(quaternion);
+    return length > 0.0 ? quaternion / length : glm::dquat(1.0, 0.0, 0.0, 0.0);
+  }
+};
+
+int64_t resolveInstanceCount(
+    const Model& model,
+    const Node& node,
+    const ExtensionExtMeshGpuInstancing& instancing) {
+  auto countFromAttribute = [&instancing, &model](const std::string& semantic) {
+    auto it = instancing.attributes.find(semantic);
+    if (it == instancing.attributes.end()) {
+      return int64_t(0);
+    }
+
+    if (semantic == "ROTATION") {
+      auto accessor = CesiumGltf::getQuaternionAccessorView(model, it->second);
+      if (getAccessorStatus(accessor) == AccessorViewStatus::Valid) {
+        return getAccessorCount(accessor);
+      }
+      return int64_t(0);
+    }
+
+    AccessorView<AccessorTypes::VEC3<float>> accessor(model, it->second);
+    return accessor.status() == AccessorViewStatus::Valid ? accessor.size() : 0;
+  };
+
+  int64_t instanceCount = countFromAttribute("TRANSLATION");
+  if (instanceCount == 0) {
+    instanceCount = countFromAttribute("ROTATION");
+  }
+  if (instanceCount == 0) {
+    instanceCount = countFromAttribute("SCALE");
+  }
+
+  if (instanceCount != 0) {
+    return instanceCount;
+  }
+
+  const auto* pInstanceFeatures =
+      node.getExtension<ExtensionExtInstanceFeatures>();
+  if (!pInstanceFeatures || pInstanceFeatures->featureIds.empty()) {
+    return 0;
+  }
+
+  int64_t attributeIndex =
+      pInstanceFeatures->featureIds[0].attribute.value_or(0);
+  auto accessor = CesiumGltf::getFeatureIdAccessorView(
+      model,
+      node,
+      static_cast<int32_t>(attributeIndex));
+  return getAccessorStatus(accessor) == AccessorViewStatus::Valid
+             ? getAccessorCount(accessor)
+             : 0;
+}
+
+void populateInstancingInfo(
+    const Model& model,
+    const Node& node,
+    CesiumPrimitiveInfo& primitiveInfo) {
+  const auto* pInstancing = node.getExtension<ExtensionExtMeshGpuInstancing>();
+  if (!pInstancing) {
+    return;
+  }
+
+  int64_t instanceCount = resolveInstanceCount(model, node, *pInstancing);
+  if (instanceCount <= 0) {
+    return;
+  }
+
+  primitiveInfo.isInstanced = true;
+  primitiveInfo.instanceTransforms.reserve(static_cast<size_t>(instanceCount));
+
+  AccessorView<AccessorTypes::VEC3<float>> translationAccessor;
+  AccessorView<AccessorTypes::VEC3<float>> scaleAccessor;
+  CesiumGltf::QuaternionAccessorType rotationAccessor;
+
+  auto translationIt = pInstancing->attributes.find("TRANSLATION");
+  if (translationIt != pInstancing->attributes.end()) {
+    translationAccessor = AccessorView<AccessorTypes::VEC3<float>>(
+        model,
+        translationIt->second);
+  }
+
+  auto rotationIt = pInstancing->attributes.find("ROTATION");
+  if (rotationIt != pInstancing->attributes.end()) {
+    rotationAccessor =
+        CesiumGltf::getQuaternionAccessorView(model, rotationIt->second);
+  }
+
+  auto scaleIt = pInstancing->attributes.find("SCALE");
+  if (scaleIt != pInstancing->attributes.end()) {
+    scaleAccessor = AccessorView<AccessorTypes::VEC3<float>>(
+        model,
+        scaleIt->second);
+  }
+
+  for (int64_t i = 0; i < instanceCount; ++i) {
+    glm::dvec3 translation = translationAccessor.status() == AccessorViewStatus::Valid
+                                 ? getVec3Value(translationAccessor, i)
+                                 : identityTranslation();
+    glm::dvec3 scale = scaleAccessor.status() == AccessorViewStatus::Valid
+                           ? getVec3Value(scaleAccessor, i)
+                           : identityScale();
+    glm::dquat rotation = getAccessorStatus(rotationAccessor) == AccessorViewStatus::Valid
+                              ? std::visit(QuaternionFromAccessor{i}, rotationAccessor)
+                              : glm::dquat(1.0, 0.0, 0.0, 0.0);
+
+    // Instance translations arrive here in final local-space units already:
+    // Cesium Native dequantizes KHR_mesh_quantization accessors before we read
+    // them, and the i3dm conversion path has already applied its own quantized
+    // position scale/offset before producing EXT_mesh_gpu_instancing.
+
+    glm::dmat4 instanceTransform =
+        glm::translate(glm::dmat4(1.0), translation) *
+        glm::mat4_cast(rotation) *
+        glm::scale(glm::dmat4(1.0), scale);
+
+    primitiveInfo.hasMirroredInstances =
+        primitiveInfo.hasMirroredInstances ||
+        glm::determinant(glm::dmat3(instanceTransform)) < 0.0;
+    primitiveInfo.instanceTransforms.push_back(instanceTransform);
+  }
+
+  const auto* pInstanceFeatures =
+      node.getExtension<ExtensionExtInstanceFeatures>();
+  if (!pInstanceFeatures) {
+    return;
+  }
+
+  primitiveInfo.instanceFeatureIds.resize(pInstanceFeatures->featureIds.size());
+  for (size_t i = 0; i < pInstanceFeatures->featureIds.size(); ++i) {
+    int64_t attributeIndex =
+        pInstanceFeatures->featureIds[i].attribute.value_or(
+            static_cast<int64_t>(i));
+
+    auto accessor = CesiumGltf::getFeatureIdAccessorView(
+        model,
+        node,
+        static_cast<int32_t>(attributeIndex));
+    if (getAccessorStatus(accessor) != AccessorViewStatus::Valid) {
+      continue;
+    }
+
+    int64_t featureCount = getAccessorCount(accessor);
+    primitiveInfo.instanceFeatureIds[i].resize(static_cast<size_t>(featureCount));
+    for (int64_t instanceIndex = 0; instanceIndex < featureCount; ++instanceIndex) {
+      primitiveInfo.instanceFeatureIds[i][static_cast<size_t>(instanceIndex)] =
+          std::visit(CesiumGltf::FeatureIdFromAccessor{instanceIndex}, accessor);
+    }
+  }
+}
 
 template <typename TIndex> struct CopyVertexColors {
   uint8_t* pWritePos;
@@ -719,6 +918,7 @@ void populateMeshDataArray(
             meshDataResult.meshDataArray[meshDataInstance++];
         CesiumPrimitiveInfo& primitiveInfo =
             meshDataResult.primitiveInfos.emplace_back();
+        populateInstancingInfo(gltf, node, primitiveInfo);
 
         auto positionAccessorIt = primitive.attributes.find("POSITION");
         if (positionAccessorIt == primitive.attributes.end()) {
@@ -1081,6 +1281,62 @@ gltfVectorToUnityVector(const std::vector<double>& values, float defaultValue) {
   return result;
 }
 
+glm::dmat4 convertInstancedTransformToUnity(const glm::dmat4& gltfTransform) {
+  // Instanced transforms should follow the same native-to-Unity conversion path
+  // as the rest of the loaded glTF scene. Applying an extra handedness flip here
+  // causes billboard crosses to collapse into edge-on slivers and mirrors the
+  // instance layout relative to the camera.
+  return gltfTransform;
+}
+
+System::Array1<UnityEngine::Matrix4x4> createInstanceMatrixArray(
+    const std::vector<glm::dmat4>& transforms) {
+  System::Array1<UnityEngine::Matrix4x4> matrices(
+      static_cast<int32_t>(transforms.size()));
+  for (int32_t i = 0; i < matrices.Length(); ++i) {
+    matrices.Item(
+        i,
+        UnityTransforms::toUnity(
+            convertInstancedTransformToUnity(
+                transforms[static_cast<size_t>(i)])));
+  }
+  return matrices;
+}
+
+System::Array1<UnityEngine::Vector4> createInstanceFeatureArray(
+    const std::vector<std::vector<int64_t>>& featureIds) {
+  size_t count = featureIds.empty() ? 0 : featureIds[0].size();
+  System::Array1<UnityEngine::Vector4> features(static_cast<int32_t>(count));
+  for (int32_t i = 0; i < features.Length(); ++i) {
+    float featureID = 0.0f;
+    if (!featureIds.empty() && static_cast<size_t>(i) < featureIds[0].size()) {
+      featureID = static_cast<float>(featureIds[0][static_cast<size_t>(i)]);
+    }
+    features.Item(i, UnityEngine::Vector4{featureID, 0.0f, 0.0f, 0.0f});
+  }
+  return features;
+}
+
+bool tilesetUsesClippingRasterOverlay(
+    const DotNet::UnityEngine::GameObject& tilesetGameObject) {
+  System::Array1<DotNet::CesiumForUnity::CesiumRasterOverlay> overlays =
+      tilesetGameObject.GetComponents<DotNet::CesiumForUnity::CesiumRasterOverlay>();
+
+  for (int32_t i = 0; i < overlays.Length(); ++i) {
+    DotNet::CesiumForUnity::CesiumRasterOverlay overlay = overlays[i];
+    if (overlay == nullptr || !overlay.enabled() ||
+        !overlay.gameObject().activeInHierarchy()) {
+      continue;
+    }
+
+    if (overlay.materialKey().ToStlString() == "Clipping") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void setGltfMaterialParameterValues(
     const CesiumGltf::Model& model,
     const CesiumPrimitiveInfo& primitiveInfo,
@@ -1092,7 +1348,13 @@ void setGltfMaterialParameterValues(
   // These similar-sounding material properties are used in various render
   // pipelines (built-in, URP, HDRP). Rather than try to figure out which
   // applies, we just set them all.
-  if (gltfMaterial.doubleSided) {
+  // Instanced billboard cards such as trees are often authored as single
+  // planes without the source material being flagged double-sided. The
+  // instanced renderer needs culling disabled for those primitives so the
+  // cards remain visible from both directions.
+  if (
+      gltfMaterial.doubleSided || primitiveInfo.hasMirroredInstances ||
+      primitiveInfo.isInstanced) {
     unityMaterial.SetFloat(materialProperties.getDoubleSidedEnableID(), 1.0f);
     unityMaterial.SetFloat(
         materialProperties.getCullID(),
@@ -1467,6 +1729,8 @@ void* UnityPrepareRendererResources::prepareInMainThread(
   CesiumForUnity::CesiumMetadata metadataComponent =
       pModelGameObject
           ->GetComponentInParent<DotNet::CesiumForUnity::CesiumMetadata>();
+  const bool clippingFallbackRequired =
+      tilesetUsesClippingRasterOverlay(this->_tilesetGameObject);
 
   if (metadataComponent == nullptr) {
     // Only add the model metadata component here if the older component isn't
@@ -1495,6 +1759,7 @@ void* UnityPrepareRendererResources::prepareInMainThread(
        &metadataComponent,
        &tile,
        &materialProperties = this->_materialProperties,
+       clippingFallbackRequired,
        tilesetLayer = this->_tilesetGameObject.layer()](
           const Model& gltf,
           const Node& node,
@@ -1538,7 +1803,14 @@ void* UnityPrepareRendererResources::prepareInMainThread(
 
         primitiveGameObject.transform().parent(pModelGameObject->transform());
         primitiveGameObject.layer(tilesetLayer);
+        const bool collapseSingleInstanceToTransform =
+            primitiveInfo.isInstanced &&
+            primitiveInfo.instanceTransforms.size() == 1;
+
         glm::dmat4 modelToEcef = tileTransform * transform;
+        if (collapseSingleInstanceToTransform) {
+          modelToEcef = modelToEcef * primitiveInfo.instanceTransforms[0];
+        }
 
         CesiumForUnity::CesiumGlobeAnchor anchor =
             primitiveGameObject
@@ -1551,9 +1823,6 @@ void* UnityPrepareRendererResources::prepareInMainThread(
         UnityEngine::MeshFilter meshFilter =
             primitiveGameObject.AddComponent<UnityEngine::MeshFilter>();
         meshFilter.sharedMesh(unityMesh);
-
-        UnityEngine::MeshRenderer meshRenderer =
-            primitiveGameObject.AddComponent<UnityEngine::MeshRenderer>();
 
         const Material* pMaterial =
             Model::getSafe(&gltf.materials, primitive.material);
@@ -1576,7 +1845,6 @@ void* UnityPrepareRendererResources::prepareInMainThread(
         UnityEngine::Material material =
             UnityEngine::Object::Instantiate(opaqueMaterial);
         material.hideFlags(UnityEngine::HideFlags::HideAndDontSave);
-        meshRenderer.material(material);
         if (pMaterial) {
           setGltfMaterialParameterValues(
               gltf,
@@ -1584,6 +1852,25 @@ void* UnityPrepareRendererResources::prepareInMainThread(
               *pMaterial,
               material,
               materialProperties);
+        }
+
+        if (
+            primitiveInfo.isInstanced &&
+            primitiveInfo.instanceTransforms.size() > 1 &&
+            !primitiveInfo.containsPoints && !clippingFallbackRequired) {
+          CesiumForUnity::InstancedTileRenderer instancedTileRenderer =
+              primitiveGameObject
+                  .AddComponent<CesiumForUnity::InstancedTileRenderer>();
+          instancedTileRenderer.Initialize(
+              unityMesh,
+              material,
+              createInstanceMatrixArray(primitiveInfo.instanceTransforms),
+              createInstanceFeatureArray(primitiveInfo.instanceFeatureIds),
+              createPhysicsMeshes);
+        } else {
+          UnityEngine::MeshRenderer meshRenderer =
+              primitiveGameObject.AddComponent<UnityEngine::MeshRenderer>();
+          meshRenderer.material(material);
         }
 
         if (primitiveInfo.containsPoints) {
@@ -1616,7 +1903,7 @@ void* UnityPrepareRendererResources::prepareInMainThread(
           pointCloudRenderer.tileInfo(tileInfo);
         }
 
-        if (createPhysicsMeshes) {
+        if (createPhysicsMeshes && !primitiveInfo.isInstanced) {
           if (!primitiveInfo.containsPoints &&
               !isDegenerateTriangleMesh(unityMesh)) {
             // This should not trigger mesh baking for physics, because the
@@ -1636,12 +1923,77 @@ void* UnityPrepareRendererResources::prepareInMainThread(
         } else {
           const ExtensionExtMeshFeatures* pFeatures =
               primitive.getExtension<ExtensionExtMeshFeatures>();
+          const ExtensionExtInstanceFeatures* pInstanceFeatures =
+              node.getExtension<ExtensionExtInstanceFeatures>();
+
           if (pFeatures) {
             CesiumFeaturesMetadataUtility::addPrimitiveFeatures(
                 primitiveGameObject,
                 gltf,
                 primitive,
                 *pFeatures);
+          }
+
+          if (pInstanceFeatures) {
+            DotNet::CesiumForUnity::CesiumPrimitiveFeatures primitiveFeatures =
+                primitiveGameObject.GetComponent<
+                    DotNet::CesiumForUnity::CesiumPrimitiveFeatures>();
+            if (primitiveFeatures == nullptr) {
+              primitiveFeatures =
+                  primitiveGameObject
+                      .AddComponent<DotNet::CesiumForUnity::CesiumPrimitiveFeatures>();
+            }
+
+            auto existingFeatureIdSets = primitiveFeatures.featureIdSets();
+            int32_t existingCount =
+                existingFeatureIdSets != nullptr ? existingFeatureIdSets.Length() : 0;
+            int32_t instanceFeatureCount =
+                static_cast<int32_t>(pInstanceFeatures->featureIds.size());
+            System::Array1<DotNet::CesiumForUnity::CesiumFeatureIdSet>
+                mergedFeatureIdSets(existingCount + instanceFeatureCount);
+
+            for (int32_t featureIndex = 0; featureIndex < existingCount;
+                 ++featureIndex) {
+              mergedFeatureIdSets.Item(featureIndex, existingFeatureIdSets[featureIndex]);
+            }
+
+            for (int32_t featureIndex = 0; featureIndex < instanceFeatureCount;
+                 ++featureIndex) {
+              const auto& featureIdDefinition =
+                  pInstanceFeatures->featureIds[static_cast<size_t>(featureIndex)];
+              DotNet::CesiumForUnity::CesiumFeatureIdSet featureIdSet(
+                  featureIdDefinition.featureCount);
+              featureIdSet.label(System::String(
+                  featureIdDefinition.label.value_or("")));
+              featureIdSet.nullFeatureId(
+                  featureIdDefinition.nullFeatureId.value_or(-1));
+              featureIdSet.propertyTableIndex(
+                  featureIdDefinition.propertyTable.value_or(-1));
+
+              int32_t targetIndex = existingCount + featureIndex;
+              mergedFeatureIdSets.Item(targetIndex, featureIdSet);
+
+              if (static_cast<size_t>(featureIndex) <
+                  primitiveInfo.instanceFeatureIds.size()) {
+                const std::vector<int64_t>& instanceFeatureIDs =
+                    primitiveInfo.instanceFeatureIds[static_cast<size_t>(featureIndex)];
+                System::Array1<int64_t> managedInstanceFeatureIDs(
+                    static_cast<int32_t>(instanceFeatureIDs.size()));
+                for (int32_t instanceIndex = 0;
+                     instanceIndex < managedInstanceFeatureIDs.Length();
+                     ++instanceIndex) {
+                  managedInstanceFeatureIDs.Item(
+                      instanceIndex,
+                      instanceFeatureIDs[static_cast<size_t>(instanceIndex)]);
+                }
+
+                primitiveFeatures.SetInstanceFeatureIds(
+                    targetIndex,
+                    managedInstanceFeatureIDs);
+              }
+            }
+
+            primitiveFeatures.featureIdSets(mergedFeatureIdSets);
           }
         }
       });
@@ -1689,9 +2041,19 @@ void freePrimitiveGameObject(
 
   UnityEngine::MeshRenderer meshRenderer =
       primitiveGameObject.GetComponent<UnityEngine::MeshRenderer>();
-  if (meshRenderer != nullptr) {
-    UnityEngine::Material material = meshRenderer.sharedMaterial();
+  UnityEngine::Material material =
+      meshRenderer != nullptr ? meshRenderer.sharedMaterial()
+                              : UnityEngine::Material(nullptr);
+  if (material == nullptr) {
+    CesiumForUnity::InstancedTileRenderer instancedTileRenderer =
+        primitiveGameObject
+            .GetComponent<CesiumForUnity::InstancedTileRenderer>();
+    if (instancedTileRenderer != nullptr) {
+      material = instancedTileRenderer.sharedMaterial();
+    }
+  }
 
+  if (material != nullptr) {
     System::Collections::Generic::List1<int> textureIDs;
     material.GetTexturePropertyNameIDs(textureIDs);
     for (int32_t i = 0, len = textureIDs.Count(); i < len; ++i) {
@@ -1703,7 +2065,6 @@ void freePrimitiveGameObject(
         UnityLifetime::Destroy(texture);
       }
     }
-
     UnityLifetime::Destroy(material);
   }
 
@@ -1862,12 +2223,20 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     if (child == nullptr)
       continue;
 
+    UnityEngine::Material material(nullptr);
     UnityEngine::MeshRenderer meshRenderer =
         child.GetComponent<UnityEngine::MeshRenderer>();
-    if (meshRenderer == nullptr)
-      continue;
+    if (meshRenderer != nullptr) {
+      material = meshRenderer.sharedMaterial();
+    } else {
+      CesiumForUnity::InstancedTileRenderer instancedTileRenderer =
+          child.GetComponent<CesiumForUnity::InstancedTileRenderer>();
+      if (instancedTileRenderer == nullptr) {
+        continue;
+      }
+      material = instancedTileRenderer.sharedMaterial();
+    }
 
-    UnityEngine::Material material = meshRenderer.sharedMaterial();
     if (material == nullptr)
       continue;
 
@@ -1948,12 +2317,20 @@ void UnityPrepareRendererResources::detachRasterInMainThread(
     if (child == nullptr)
       continue;
 
+    UnityEngine::Material material(nullptr);
     UnityEngine::MeshRenderer meshRenderer =
         child.GetComponent<UnityEngine::MeshRenderer>();
-    if (meshRenderer == nullptr)
-      continue;
+    if (meshRenderer != nullptr) {
+      material = meshRenderer.sharedMaterial();
+    } else {
+      CesiumForUnity::InstancedTileRenderer instancedTileRenderer =
+          child.GetComponent<CesiumForUnity::InstancedTileRenderer>();
+      if (instancedTileRenderer == nullptr) {
+        continue;
+      }
+      material = instancedTileRenderer.sharedMaterial();
+    }
 
-    UnityEngine::Material material = meshRenderer.sharedMaterial();
     if (material == nullptr)
       continue;
 

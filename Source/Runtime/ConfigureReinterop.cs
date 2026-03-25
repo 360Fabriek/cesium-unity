@@ -159,6 +159,7 @@ namespace CesiumForUnity
             MeshRenderer meshRenderer = new MeshRenderer();
             GameObject meshGameObject = meshRenderer.gameObject;
             meshRenderer.material = UnityEngine.Object.Instantiate(meshRenderer.material);
+            meshRenderer.enabled = meshRenderer.enabled;
 
             int id = Shader.PropertyToID("name");
             int crc = meshRenderer.material.ComputeCRC();
@@ -181,6 +182,7 @@ namespace CesiumForUnity
             meshRenderer.material.shaderKeywords = meshRenderer.material.shaderKeywords;
             meshRenderer.sharedMaterial = meshRenderer.sharedMaterial;
             meshRenderer.material.shader = meshRenderer.material.shader;
+            meshRenderer.material.enableInstancing = meshRenderer.material.enableInstancing;
             UnityEngine.Object.Destroy(meshGameObject);
             UnityEngine.Object.DestroyImmediate(meshGameObject, true);
             UnityEngine.Object.DestroyImmediate(meshGameObject);
@@ -188,6 +190,19 @@ namespace CesiumForUnity
             MeshFilter meshFilter = new MeshFilter();
             meshFilter.mesh = mesh;
             meshFilter.sharedMesh = mesh;
+
+            MaterialPropertyBlock materialPropertyBlock = new MaterialPropertyBlock();
+            materialPropertyBlock.SetVectorArray("name", new Vector4[1]);
+            materialPropertyBlock.SetMatrixArray("name", new Matrix4x4[1]);
+
+            InstancedTileRenderer instancedTileRenderer = go.AddComponent<InstancedTileRenderer>();
+            InstancedTileRenderer existingInstancedTileRenderer = go.GetComponent<InstancedTileRenderer>();
+            CesiumPrimitiveFeatures parentPrimitiveFeatures = go.GetComponentInParent<CesiumPrimitiveFeatures>();
+            instancedTileRenderer.Initialize(mesh, meshRenderer.material, new Matrix4x4[1], new Vector4[1], true);
+            Material instancedMaterial = instancedTileRenderer.sharedMaterial;
+            int instanceCount = instancedTileRenderer.instanceCount;
+            bool instancedEnabled = instancedTileRenderer.isEnabledForRendering;
+            instancedTileRenderer.isEnabledForRendering = instancedEnabled;
 
             Resources.Load<Material>("name");
 
@@ -860,6 +875,8 @@ namespace CesiumForUnity
 
             primitiveFeatures.featureIdSets[0] = featureIdAttribute;
             primitiveFeatures.featureIdSets[1] = featureIdTexture;
+            primitiveFeatures.SetInstanceFeatureIds(0, new Int64[1]);
+            primitiveFeatures.GetFeatureIdForInstance(0);
 
             CesiumModelMetadata modelMetadata = go.AddComponent<CesiumModelMetadata>();
             modelMetadata = go.GetComponent<CesiumModelMetadata>();

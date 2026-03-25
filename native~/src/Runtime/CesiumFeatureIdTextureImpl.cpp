@@ -6,6 +6,7 @@
 #include <DotNet/CesiumForUnity/CesiumFeatureIdTexture.h>
 #include <DotNet/CesiumForUnity/CesiumFeatureIdTextureStatus.h>
 #include <DotNet/CesiumForUnity/CesiumPrimitiveFeatures.h>
+#include <DotNet/UnityEngine/GameObject.h>
 #include <DotNet/UnityEngine/Matrix4x4.h>
 #include <DotNet/UnityEngine/RaycastHit.h>
 #include <DotNet/UnityEngine/Transform.h>

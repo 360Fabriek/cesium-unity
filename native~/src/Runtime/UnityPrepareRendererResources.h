@@ -59,6 +59,28 @@ struct CesiumPrimitiveInfo {
    * the corresponding Unity texture coordinate index.
    */
   std::unordered_map<uint32_t, uint32_t> rasterOverlayUvIndexMap{};
+
+  /**
+   * @brief Whether this primitive should be rendered via DrawMeshInstanced.
+   */
+  bool isInstanced = false;
+
+  /**
+   * @brief Per-instance transforms in the primitive local space.
+   */
+  std::vector<glm::dmat4> instanceTransforms{};
+
+  /**
+   * @brief Per-instance feature IDs grouped by feature ID set index.
+   */
+  std::vector<std::vector<int64_t>> instanceFeatureIds{};
+
+  /**
+   * @brief Whether any instance transform mirrors the source mesh.
+   * @remarks DrawMeshInstanced cannot flip culling state per instance, so
+   * mirrored instances require a two-sided material for correctness.
+   */
+  bool hasMirroredInstances = false;
 };
 
 /**

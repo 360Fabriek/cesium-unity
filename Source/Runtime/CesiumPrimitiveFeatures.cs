@@ -16,6 +16,8 @@ namespace CesiumForUnity
     [AddComponentMenu("")]
     public partial class CesiumPrimitiveFeatures : MonoBehaviour
     {
+        private Int64[][] _instanceFeatureIds = Array.Empty<Int64[]>();
+
         /// <summary>
         /// The <see cref="CesiumFeatureIdSet"/>s available on this primitive.
         /// </summary>
@@ -72,6 +74,38 @@ namespace CesiumForUnity
             return Array.FindAll(this.featureIdSets, set => (set.type == type));
         }
 
+        public void SetInstanceFeatureIds(Int64 featureIdSetIndex, Int64[] featureIds)
+        {
+            if (featureIdSetIndex < 0)
+            {
+                return;
+            }
+
+            int targetIndex = (int)featureIdSetIndex;
+            if (this._instanceFeatureIds.Length <= targetIndex)
+            {
+                Array.Resize(ref this._instanceFeatureIds, targetIndex + 1);
+            }
+
+            this._instanceFeatureIds[targetIndex] = featureIds ?? Array.Empty<Int64>();
+        }
+
+        public Int64 GetFeatureIdForInstance(Int32 instanceIndex, Int64 featureIdSetIndex = 0)
+        {
+            if (featureIdSetIndex < 0 || featureIdSetIndex >= this._instanceFeatureIds.Length)
+            {
+                return -1;
+            }
+
+            Int64[] featureIds = this._instanceFeatureIds[featureIdSetIndex];
+            if (featureIds == null || instanceIndex < 0 || instanceIndex >= featureIds.Length)
+            {
+                return -1;
+            }
+
+            return featureIds[instanceIndex];
+        }
+
         /// <summary>
         /// Gets the feature ID associated with the given triangle, specified by index.
         /// </summary>
@@ -114,8 +148,35 @@ namespace CesiumForUnity
         /// <returns>The feature ID, or -1 if the specified feature ID set is invalid.</returns>
         public Int64 GetFeatureIdFromRaycastHit(RaycastHit hitInfo, Int64 featureIdSetIndex = 0)
         {
-            if (hitInfo.transform.GetComponent<CesiumPrimitiveFeatures>() != this ||
-                featureIdSetIndex < 0 || featureIdSetIndex >= this.featureIdSets.Length)
+            if (featureIdSetIndex < 0 || featureIdSetIndex >= this.featureIdSets.Length)
+            {
+                return -1;
+            }
+
+            InstancedTilePickingProxy pickingProxy =
+                hitInfo.transform.GetComponent<InstancedTilePickingProxy>();
+            if (pickingProxy != null)
+            {
+                CesiumPrimitiveFeatures parentFeatures =
+                    hitInfo.transform.GetComponentInParent<CesiumPrimitiveFeatures>();
+                if (parentFeatures != this)
+                {
+                    return -1;
+                }
+
+                Int64 instanceFeatureId = this.GetFeatureIdForInstance(
+                    pickingProxy.instanceIndex,
+                    featureIdSetIndex);
+                if (instanceFeatureId >= 0)
+                {
+                    return instanceFeatureId;
+                }
+            }
+
+            CesiumPrimitiveFeatures hitFeatures =
+                hitInfo.transform.GetComponent<CesiumPrimitiveFeatures>();
+            if (hitFeatures != this &&
+                hitInfo.transform.GetComponentInParent<CesiumPrimitiveFeatures>() != this)
             {
                 return -1;
             }

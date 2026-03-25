@@ -1,5 +1,6 @@
 #include "TextureLoader.h"
 
+#include <CesiumGltf/ExtensionTextureWebp.h>
 #include <CesiumGltf/Model.h>
 #include <CesiumGltf/Sampler.h>
 #include <CesiumUtility/Tracing.h>
@@ -67,6 +68,19 @@ getUncompressedPixelFormat(const CesiumGltf::ImageAsset& image) {
   default:
     return UnityEngine::TextureFormat::RGBA32;
   }
+}
+
+const Image* resolveTextureImage(
+    const CesiumGltf::Model& model,
+    const CesiumGltf::Texture& texture) {
+  if (const ExtensionTextureWebp* pWebp =
+          texture.getExtension<ExtensionTextureWebp>()) {
+    if (const Image* pWebpImage = Model::getSafe(&model.images, pWebp->source)) {
+      return pWebpImage;
+    }
+  }
+
+  return Model::getSafe(&model.images, texture.source);
 }
 
 } // namespace
@@ -139,7 +153,7 @@ UnityEngine::Texture TextureLoader::loadTexture(
     const CesiumGltf::Model& model,
     const CesiumGltf::Texture& texture,
     bool sRGB) {
-  const Image* pImage = Model::getSafe(&model.images, texture.source);
+  const Image* pImage = resolveTextureImage(model, texture);
   if (!pImage) {
     return UnityEngine::Texture(nullptr);
   }
