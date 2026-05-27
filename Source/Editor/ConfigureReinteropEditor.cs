@@ -18,8 +18,6 @@ namespace CesiumForUnity
     {
         public void ExposeToCPP()
         {
-            Debug.Log("log");
-
             UnityWebRequest request = UnityWebRequest.Get("url");
             request.Abort();
             request.Dispose();

@@ -1,4 +1,6 @@
 #if UNITY_EDITOR
+// Modified by 360Fabriek for the patched Cesium for Unity redistribution.
+// See NOTICE and MODIFICATIONS.md.
 using System;
 using System.IO;
 using System.Linq;
@@ -7,6 +9,7 @@ using System.Text;
 using System.Threading;
 using UnityEditor;
 using Unity.CodeEditor;
+using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using UnityEditor.Compilation;
 using UnityEditor.PackageManager;
@@ -171,38 +174,57 @@ namespace CesiumForUnity
 
         private static void BuildPlayer(BuildTargetGroup targetGroup, BuildTarget target, string outputPath, bool deleteProject = true)
         {
-			CodeEditor.Editor.CurrentCodeEditor.SyncAll();
-            BuildReport report = BuildPipeline.BuildPlayer(new BuildPlayerOptions()
-            {
-                locationPathName = Path.Combine(outputPath, "game"),
-                targetGroup = targetGroup,
-                target = target,
-                scenes = new[] { "Assets/Scenes/Empty.unity" }
-            });
+            NamedBuildTarget namedBuildTarget = NamedBuildTarget.FromBuildTargetGroup(targetGroup);
+            string originalDefines = PlayerSettings.GetScriptingDefineSymbols(namedBuildTarget);
+            string buildDefines = originalDefines
+                .Split(';')
+                .Contains("URP_COMPATIBILITY_MODE")
+                    ? originalDefines
+                    : string.IsNullOrEmpty(originalDefines)
+                        ? "URP_COMPATIBILITY_MODE"
+                        : originalDefines + ";URP_COMPATIBILITY_MODE";
 
-            if (report.summary.totalErrors > 0)
+            try
             {
-                StringBuilder errorReport = new StringBuilder();
-                errorReport.AppendLine("BuildPlayer failed:");
-                foreach (BuildStep step in report.steps)
+                PlayerSettings.SetScriptingDefineSymbols(namedBuildTarget, buildDefines);
+
+			    CodeEditor.Editor.CurrentCodeEditor.SyncAll();
+                BuildReport report = BuildPipeline.BuildPlayer(new BuildPlayerOptions()
                 {
-                    var errorMessages = step.messages.Where(message => message.type == LogType.Error || message.type == LogType.Exception);
-                    if (!errorMessages.Any())
-                        continue;
+                    locationPathName = Path.Combine(outputPath, "game"),
+                    targetGroup = targetGroup,
+                    target = target,
+                    scenes = new[] { "Assets/Scenes/Empty.unity" }
+                });
 
-                    errorReport.AppendLine("  In step " + step.name + ":");
-
-                    foreach (BuildStepMessage message in errorMessages)
+                if (report.summary.totalErrors > 0)
+                {
+                    StringBuilder errorReport = new StringBuilder();
+                    errorReport.AppendLine("BuildPlayer failed:");
+                    foreach (BuildStep step in report.steps)
                     {
-                        errorReport.AppendLine("    - " + message.content);
-                    }
-                }
-                throw new Exception(errorReport.ToString());
-            }
+                        var errorMessages = step.messages.Where(message => message.type == LogType.Error || message.type == LogType.Exception);
+                        if (!errorMessages.Any())
+                            continue;
 
-            // We don't actually need the built project; delete it.
-            if (deleteProject && Directory.Exists(outputPath))
-                Directory.Delete(outputPath, true);
+                        errorReport.AppendLine("  In step " + step.name + ":");
+
+                        foreach (BuildStepMessage message in errorMessages)
+                        {
+                            errorReport.AppendLine("    - " + message.content);
+                        }
+                    }
+                    throw new Exception(errorReport.ToString());
+                }
+
+                // We don't actually need the built project; delete it.
+                if (deleteProject && Directory.Exists(outputPath))
+                    Directory.Delete(outputPath, true);
+            }
+            finally
+            {
+                PlayerSettings.SetScriptingDefineSymbols(namedBuildTarget, originalDefines);
+            }
         }
     }
 }

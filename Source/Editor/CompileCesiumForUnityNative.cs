@@ -1,4 +1,6 @@
 #if UNITY_EDITOR
+// Modified by 360Fabriek for the patched Cesium for Unity redistribution.
+// See NOTICE and MODIFICATIONS.md.
 using UnityEditor;
 using UnityEngine;
 using UnityEditor.Build;
@@ -345,7 +347,9 @@ namespace CesiumForUnity
                 : "RelWithDebInfo";
             library.InstallDirectory = GetInstallDirectoryForPlatform(platform, packagePath);
             library.CleanBuild = platform.isCleanBuild;
-			library.ExtraConfigureArgs.Add("-G \"Visual Studio 17 2022\"");
+
+            if (SystemInfo.operatingSystemFamily == OperatingSystemFamily.Windows)
+                library.ExtraConfigureArgs.Add("-G \"Visual Studio 17 2022\"");
 			
             if (IsEditor(platform))
                 library.ExtraConfigureArgs.Add("-DEDITOR=on");

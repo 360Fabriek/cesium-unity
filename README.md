@@ -30,6 +30,10 @@ Using Cesium ion helps support Cesium for Unity development. ❤️
 
 Cesium for Unity is tightly integrated with Unity making it possible to visualize and interact with real-world content in editor and at runtime. The plugin also has support for Unity game objects, physics, collisions, and character interaction. Leverage decades worth of cutting-edge advancements in Unity and geospatial to create cohesive, interactive, and realistic simulations and applications with Cesium for Unity.
 
+### 360Fabriek patched redistribution
+
+This package may be redistributed as a 360Fabriek patched version of Cesium for Unity. It is based on the upstream CesiumGS project and includes local build, packaging, Reinterop, and native build changes. See [NOTICE](NOTICE) for attribution and modification notes.
+
 ### 📗 License
 
 [Apache 2.0](http://www.apache.org/licenses/LICENSE-2.0.html). Cesium for Unity is free for both commercial and non-commercial use.

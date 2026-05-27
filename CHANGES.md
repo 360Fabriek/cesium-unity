@@ -6,6 +6,11 @@
 
 - The native Android library (`libCesiumForUnityNative.so`) is now built with 16 KB ELF segment alignment, enabling compatibility with Android 15+ devices that use 16 KB memory pages.
 
+##### 360Fabriek patched redistribution
+
+- Added redistribution notices for the 360Fabriek patched package while preserving CesiumGS Apache-2.0 licensing and attribution.
+- Added local build and packaging scripts for producing patched package artifacts.
+
 ## v1.23.2 - 2026-05-01
 
 This release updates [cesium-native](https://github.com/CesiumGS/cesium-native) from v0.59.0 to v0.60.0. See the [changelog](https://github.com/CesiumGS/cesium-native/blob/main/CHANGES.md) for a complete list of changes in cesium-native.

@@ -1,7 +1,9 @@
+<!-- Modified by 360Fabriek for the patched Cesium for Unity redistribution. See NOTICE and MODIFICATIONS.md. -->
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>Preview</LangVersion>
@@ -11,7 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="RoslynIncrementalGenerator.cs" />
+    <Compile Include="**/*.cs" Exclude="RoslynIncrementalGenerator.cs;bin/**/*.cs;obj/**/*.cs;Generated/**/*.cs" />
   </ItemGroup>
   
   <ItemGroup>

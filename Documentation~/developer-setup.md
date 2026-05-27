@@ -69,6 +69,18 @@ NotImplementedException: The native implementation is missing so OnValidate cann
 
 This is because the C++ code has not yet been compiled. To compile the C++ code for use by the Editor, run:
 
+On macOS, build both editor architectures and install them into the architecture-specific plugin folders. Do not use the default CMake install prefix, because that installs a flat `Editor/libCesiumForUnityNative.dylib` that can be loaded instead of the correct architecture-specific library.
+
+```
+cd cesium-unity-samples/Packages/com.cesium.unity
+cmake -B native~/build-x64 -S native~ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_INSTALL_PREFIX="$PWD/Editor/x86_64"
+cmake --build native~/build-x64 -j14 --target install --config Debug
+cmake -B native~/build-arm64 -S native~ -DCMAKE_BUILD_TYPE=Debug -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_INSTALL_PREFIX="$PWD/Editor/arm64"
+cmake --build native~/build-arm64 -j14 --target install --config Debug
+```
+
+On Windows or Linux, run:
+
 ```
 cd cesium-unity-samples/Packages/com.cesium.unity/native~
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug
@@ -77,7 +89,17 @@ cmake --build build -j14 --target install --config Debug
 
 The `-j14` tells CMake to build using 14 threads. A higher or lower number may be more suitable for your system.
 
-To build a release build, use these commands instead:
+To build a release build on macOS, use these commands instead:
+
+```
+cd cesium-unity-samples/Packages/com.cesium.unity
+cmake -B native~/build-x64 -S native~ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_INSTALL_PREFIX="$PWD/Editor/x86_64"
+cmake --build native~/build-x64 -j14 --target install --config RelWithDebInfo
+cmake -B native~/build-arm64 -S native~ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_INSTALL_PREFIX="$PWD/Editor/arm64"
+cmake --build native~/build-arm64 -j14 --target install --config RelWithDebInfo
+```
+
+On Windows or Linux, use these commands instead:
 
 ```
 cd cesium-unity-samples/Packages/com.cesium.unity/native~

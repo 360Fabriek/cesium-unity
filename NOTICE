@@ -1,0 +1,19 @@
+Cesium for Unity - 360Fabriek patched redistribution
+
+This distribution is based on Cesium for Unity from CesiumGS:
+https://github.com/CesiumGS/cesium-unity
+
+Cesium for Unity is licensed under the Apache License, Version 2.0.
+The Apache License, Version 2.0 is included in this distribution as LICENSE.
+
+This patched redistribution includes modifications by 360Fabriek. The
+modifications include build and packaging changes for Unity 6000.3.13f1,
+platform packaging automation, Reinterop build configuration updates, and
+local native build adjustments. Modified source files in this repository
+should be treated as changed from the upstream CesiumGS version.
+
+The Cesium name, Cesium logo, and related marks are trademarks of Cesium GS,
+Inc. This patched redistribution is not an official CesiumGS release.
+
+Third-party dependency notices are listed in ThirdParty.json and in any
+third-party attribution files distributed with the package.

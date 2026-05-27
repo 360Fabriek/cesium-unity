@@ -434,6 +434,10 @@ namespace Build
             {
                 "LICENSE",
                 "LICENSE.meta",
+                "NOTICE",
+                "NOTICE.meta",
+                "MODIFICATIONS.md",
+                "MODIFICATIONS.md.meta",
                 "package.json",
                 "package.json.meta",
                 "Editor.meta",
