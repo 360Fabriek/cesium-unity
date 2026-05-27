@@ -346,6 +346,7 @@ void Cesium3DTilesetImpl::UpdateInternal(
       return;
   }
 
+  getAsyncSystem().dispatchMainThreadTasks();
   std::vector<ViewState> viewStates =
       CameraManager::getAllCameras(tileset, *this);
 
