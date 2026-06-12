@@ -28,7 +28,7 @@
 #include <DotNet/CesiumForUnity/CesiumSampleHeightResult.h>
 #include <DotNet/CesiumForUnity/CesiumTileExcluder.h>
 #include <DotNet/Reinterop/ReinteropNativeException.h>
-#include <DotNet/CesiumForUnity/I3dmInstanceRenderer.h>
+#include <DotNet/CesiumForUnity/InstancedTilesetRenderer.h>
 #include <DotNet/System/Exception.h>
 #include <DotNet/System/Object.h>
 #include <DotNet/System/String.h>
@@ -95,24 +95,24 @@ CesiumGltfGameObject* getTileGameObject(const Tile* pTile) {
   return pCesiumGameObject;
 }
 
-bool hasI3dmInstanceRenderer(const Tile* pTile) {
+bool hasInstancedTilesetRenderer(const Tile* pTile) {
   CesiumGltfGameObject* pCesiumGameObject = getTileGameObject(pTile);
   if (!pCesiumGameObject) {
     return false;
   }
 
   return pCesiumGameObject->pGameObject
-             ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>() != nullptr;
+             ->GetComponent<CesiumForUnity::InstancedTilesetRenderer>() != nullptr;
 }
 
-CesiumForUnity::I3dmInstanceRenderer getI3dmInstanceRenderer(const Tile* pTile) {
+CesiumForUnity::InstancedTilesetRenderer getInstancedTilesetRenderer(const Tile* pTile) {
   CesiumGltfGameObject* pCesiumGameObject = getTileGameObject(pTile);
   if (!pCesiumGameObject) {
     return nullptr;
   }
 
   return pCesiumGameObject->pGameObject
-             ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>();
+             ->GetComponent<CesiumForUnity::InstancedTilesetRenderer>();
 }
 
 bool isImplicitPlaceholderTile(const Tile& tile) {
@@ -182,7 +182,7 @@ const Tile* resolveActivationTile(const Tile* pTile) {
 
   const Tile* pAncestor = pTile->getParent();
   while (pAncestor) {
-    if (hasI3dmInstanceRenderer(pAncestor) &&
+    if (hasInstancedTilesetRenderer(pAncestor) &&
         getBaseTileUrl(pAncestor) == selectedBaseUrl) {
       return pAncestor;
     }
@@ -222,8 +222,8 @@ void updateI3dmTileSelectionBounds(
     const std::unordered_map<const Tile*, std::vector<TileSelectionBounds>>&
         forwardedBoundsByTile) {
   for (Tile::ConstPointer pTile : tilesToActivate) {
-    CesiumForUnity::I3dmInstanceRenderer renderer =
-        getI3dmInstanceRenderer(pTile);
+    CesiumForUnity::InstancedTilesetRenderer renderer =
+        getInstancedTilesetRenderer(pTile);
     if (renderer == nullptr) {
       continue;
     }

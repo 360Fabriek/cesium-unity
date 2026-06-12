@@ -706,6 +706,28 @@ namespace CesiumForUnity
         }
 
         [SerializeField]
+        private InstancedTilesetRenderer.RaycastColliderMode _instancedTileColliderMode =
+            InstancedTilesetRenderer.RaycastColliderMode.Disabled;
+
+        /// <summary>
+        /// The collider mode to use for instanced 3D Tiles content.
+        /// </summary>
+        /// <remarks>
+        /// Instanced tiles do not create MeshFilter objects for each instance. When this is
+        /// set to <see cref="InstancedTilesetRenderer.RaycastColliderMode.BoxPerInstance"/>,
+        /// the renderer creates coarse BoxCollider proxies that can be used for raycasts.
+        /// </remarks>
+        public InstancedTilesetRenderer.RaycastColliderMode instancedTileColliderMode
+        {
+            get => this._instancedTileColliderMode;
+            set
+            {
+                this._instancedTileColliderMode = value;
+                this.ApplyInstancedTileSettingsToLoadedTiles();
+            }
+        }
+
+        [SerializeField]
         private bool _createPhysicsMeshes = true;
 
         /// <summary>
@@ -774,9 +796,31 @@ namespace CesiumForUnity
         /// <returns>An asynchronous task that will provide the requested heights when complete.</returns>
         public partial Task<CesiumSampleHeightResult> SampleHeightMostDetailed(params double3[] longitudeLatitudeHeightPositions);
 
+        /// <summary>
+        /// Applies instanced tile settings to currently loaded instanced renderers.
+        /// </summary>
+        public void ApplyInstancedTileSettingsToLoadedTiles()
+        {
+            InstancedTilesetRenderer[] renderers = this.GetComponentsInChildren<InstancedTilesetRenderer>(true);
+            foreach (InstancedTilesetRenderer renderer in renderers)
+            {
+                this.ApplyInstancedTileSettingsToRenderer(renderer);
+            }
+        }
+
         #endregion
 
         #region Private Methods
+
+        internal void ApplyInstancedTileSettingsToRenderer(InstancedTilesetRenderer renderer)
+        {
+            if (renderer == null)
+            {
+                return;
+            }
+
+            renderer.colliderMode = this._instancedTileColliderMode;
+        }
 
         private partial void SetShowCreditsOnScreen(bool value);
 

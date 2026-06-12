@@ -35,7 +35,7 @@
 #include <DotNet/CesiumForUnity/CesiumPointCloudRenderer.h>
 #include <DotNet/CesiumForUnity/CesiumPrimitiveFeatures.h>
 #include <DotNet/CesiumForUnity/CesiumPropertyTable.h>
-#include <DotNet/CesiumForUnity/I3dmInstanceRenderer.h>
+#include <DotNet/CesiumForUnity/InstancedTilesetRenderer.h>
 #include <DotNet/System/Array1.h>
 #include <DotNet/System/Collections/Generic/List1.h>
 #include <DotNet/System/Object.h>
@@ -2069,16 +2069,16 @@ void* UnityPrepareRendererResources::prepareInMainThread(
               }
             }
 
-            System::Array1<CesiumForUnity::I3dmInstanceRenderer>
+            System::Array1<CesiumForUnity::InstancedTilesetRenderer>
                 existingRenderers =
                     pModelGameObject
-                        ->GetComponents<CesiumForUnity::I3dmInstanceRenderer>();
+                        ->GetComponents<CesiumForUnity::InstancedTilesetRenderer>();
 
-            CesiumForUnity::I3dmInstanceRenderer i3dmInstanceRenderer =
+            CesiumForUnity::InstancedTilesetRenderer instancedTilesetRenderer =
                 existingRenderers.Length() > 0
                     ? existingRenderers[0]
                     : pModelGameObject
-                          ->AddComponent<CesiumForUnity::I3dmInstanceRenderer>(
+                          ->AddComponent<CesiumForUnity::InstancedTilesetRenderer>(
                           );
 
             if (existingRenderers.Length() > 0) {
@@ -2101,7 +2101,7 @@ void* UnityPrepareRendererResources::prepareInMainThread(
                   UnityTransforms::toUnityMathematics(instance.transform));
             }
 
-            i3dmInstanceRenderer.AddInstanceGroup(
+            instancedTilesetRenderer.AddInstanceGroup(
                 System::String(groupId),
                 baseMesh,
                 material,
@@ -2237,7 +2237,7 @@ void* UnityPrepareRendererResources::prepareInMainThread(
   if (!isUpsampledI3dmTile &&
       pModelGameObject->transform().childCount() == 0 &&
       pModelGameObject
-              ->GetComponent<CesiumForUnity::I3dmInstanceRenderer>() ==
+              ->GetComponent<CesiumForUnity::InstancedTilesetRenderer>() ==
           nullptr) {
     releaseMeshesToPool(pLoadThreadResult->meshes);
     UnityLifetime::Destroy(*pModelGameObject);
@@ -2246,7 +2246,7 @@ void* UnityPrepareRendererResources::prepareInMainThread(
 
   // Newly-created instanced tiles may miss the current frame's activation pass
   // because tile selection happens before main-thread resource creation.
-  if (pModelGameObject->GetComponent<CesiumForUnity::I3dmInstanceRenderer>() !=
+  if (pModelGameObject->GetComponent<CesiumForUnity::InstancedTilesetRenderer>() !=
       nullptr) {
     pModelGameObject->SetActive(true);
   }
@@ -2543,11 +2543,11 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     }
   }
 
-  System::Array1<CesiumForUnity::I3dmInstanceRenderer> i3dmRenderers =
+  System::Array1<CesiumForUnity::InstancedTilesetRenderer> instancedRenderers =
       pCesiumGameObject->pGameObject
-          ->GetComponents<CesiumForUnity::I3dmInstanceRenderer>();
+          ->GetComponents<CesiumForUnity::InstancedTilesetRenderer>();
 
-  if (i3dmRenderers.Length() == 0) {
+  if (instancedRenderers.Length() == 0) {
     return;
   }
 
@@ -2572,8 +2572,8 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     }
 
     float textureCoordinateIndex = static_cast<float>(texCoordIndexIt->second);
-    for (int32_t i = 0, len = i3dmRenderers.Length(); i < len; ++i) {
-      i3dmRenderers[i].SetRasterOverlayForPrimitive(
+    for (int32_t i = 0, len = instancedRenderers.Length(); i < len; ++i) {
+      instancedRenderers[i].SetRasterOverlayForPrimitive(
           primitive,
           overlayTextureCoordinatePropertyID,
           textureCoordinateIndex,
@@ -2640,10 +2640,10 @@ void UnityPrepareRendererResources::detachRasterInMainThread(
     return;
   }
 
-  System::Array1<CesiumForUnity::I3dmInstanceRenderer> i3dmRenderers =
+  System::Array1<CesiumForUnity::InstancedTilesetRenderer> instancedRenderers =
       pCesiumGameObject->pGameObject
-          ->GetComponents<CesiumForUnity::I3dmInstanceRenderer>();
-  if (i3dmRenderers.Length() == 0) {
+          ->GetComponents<CesiumForUnity::InstancedTilesetRenderer>();
+  if (instancedRenderers.Length() == 0) {
     return;
   }
 
@@ -2652,8 +2652,8 @@ void UnityPrepareRendererResources::detachRasterInMainThread(
                    static_cast<int32_t>(pCesiumGameObject->primitiveInfos.size());
        primitive < primitiveCount;
        ++primitive) {
-    for (int32_t i = 0, len = i3dmRenderers.Length(); i < len; ++i) {
-      i3dmRenderers[i].ClearRasterOverlayTextureForPrimitive(
+    for (int32_t i = 0, len = instancedRenderers.Length(); i < len; ++i) {
+      instancedRenderers[i].ClearRasterOverlayTextureForPrimitive(
           primitive,
           *maybeOverlayTextureID);
     }

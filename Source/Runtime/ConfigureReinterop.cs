@@ -1,4 +1,4 @@
-﻿using Reinterop;
+using Reinterop;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -609,17 +609,17 @@ namespace CesiumForUnity
             double3 cv4 = new double3(1.0, 2.0, 3.0);
             double3x3 matrix3x3 = double3x3.identity;
 
-            go.GetComponent<I3dmInstanceRenderer>();
-            I3dmInstanceRenderer[] i3dmRenderersOnSelf = go.GetComponents<I3dmInstanceRenderer>();
-            I3dmInstanceRenderer[] i3dmRenderers = go.GetComponentsInChildren<I3dmInstanceRenderer>();
-            i3dmRenderers = go.GetComponentsInChildren<I3dmInstanceRenderer>(true);
-            I3dmInstanceRenderer i3dmRenderer = i3dmRenderers[i3dmRenderers.Length - 1];
-            i3dmRenderer = go.AddComponent<I3dmInstanceRenderer>();
-            i3dmRenderer.AddInstanceGroup("groupId", mesh, meshRenderer.material, double4x4List, 0);
-            i3dmRenderer.SetRasterOverlayForPrimitive(0, -1, 0.0f, -1, null, -1, Vector4.zero);
-            i3dmRenderer.ClearRasterOverlayTextureForPrimitive(0, -1);
-            i3dmRenderer.ClearTileSelectionBounds();
-            i3dmRenderer.AddTileSelectionBounds(0.0, 0.0, 1.0, 1.0, false);
+            go.GetComponent<InstancedTilesetRenderer>();
+            InstancedTilesetRenderer[] instancedRenderersOnSelf = go.GetComponents<InstancedTilesetRenderer>();
+            InstancedTilesetRenderer[] instancedRenderers = go.GetComponentsInChildren<InstancedTilesetRenderer>();
+            instancedRenderers = go.GetComponentsInChildren<InstancedTilesetRenderer>(true);
+            InstancedTilesetRenderer instancedRenderer = instancedRenderers[instancedRenderers.Length - 1];
+            instancedRenderer = go.AddComponent<InstancedTilesetRenderer>();
+            instancedRenderer.AddInstanceGroup("groupId", mesh, meshRenderer.material, double4x4List, 0);
+            instancedRenderer.SetRasterOverlayForPrimitive(0, -1, 0.0f, -1, null, -1, Vector4.zero);
+            instancedRenderer.ClearRasterOverlayTextureForPrimitive(0, -1);
+            instancedRenderer.ClearTileSelectionBounds();
+            instancedRenderer.AddTileSelectionBounds(0.0, 0.0, 1.0, 1.0, false);
 
             go.GetComponent<CesiumGlobeAnchor>();
             CesiumGlobeAnchor[] globeAnchors = go.GetComponentsInChildren<CesiumGlobeAnchor>();

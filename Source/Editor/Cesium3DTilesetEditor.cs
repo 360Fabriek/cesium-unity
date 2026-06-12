@@ -44,6 +44,7 @@ namespace CesiumForUnity
         private SerializedProperty _updateInEditor;
         private SerializedProperty _logSelectionStats;
 
+        private SerializedProperty _instancedTileColliderMode;
         private SerializedProperty _createPhysicsMeshes;
 
         private void OnEnable()
@@ -95,6 +96,9 @@ namespace CesiumForUnity
             this._updateInEditor = this.serializedObject.FindProperty("_updateInEditor");
             this._logSelectionStats = this.serializedObject.FindProperty("_logSelectionStats");
 
+            this._instancedTileColliderMode =
+                this.serializedObject.FindProperty("_instancedTileColliderMode");
+
             this._createPhysicsMeshes =
                 this.serializedObject.FindProperty("_createPhysicsMeshes");
         }
@@ -121,6 +125,8 @@ namespace CesiumForUnity
             this.DrawPointCloudShadingProperties();
             EditorGUILayout.Space(5);
             this.DrawDebugProperties();
+            EditorGUILayout.Space(5);
+            this.DrawInstancedTilesProperties();
             EditorGUILayout.Space(5);
             this.DrawPhysicsProperties();
 
@@ -553,6 +559,26 @@ namespace CesiumForUnity
                 "\n\n" +
                 "Physics meshes cannot be generated for primitives containing points.");
             EditorGUILayout.PropertyField(this._createPhysicsMeshes, createPhysicsMeshesContent);
+        }
+
+        private void DrawInstancedTilesProperties()
+        {
+            GUILayout.Label("Instanced Tiles", EditorStyles.boldLabel);
+
+            GUIContent colliderModeContent = new GUIContent(
+                "Collider Mode",
+                "Controls optional raycast colliders for instanced 3D Tiles content. " +
+                "Disabled is fastest. Box Per Instance creates coarse BoxCollider proxies " +
+                "for ray selection.");
+
+            EditorGUI.BeginChangeCheck();
+            EditorGUILayout.PropertyField(this._instancedTileColliderMode, colliderModeContent);
+            if (EditorGUI.EndChangeCheck())
+            {
+                this.serializedObject.ApplyModifiedProperties();
+                this._tileset.ApplyInstancedTileSettingsToLoadedTiles();
+                this.serializedObject.Update();
+            }
         }
     }
 }
