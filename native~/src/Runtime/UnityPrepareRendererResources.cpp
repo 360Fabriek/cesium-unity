@@ -11,11 +11,14 @@
 #include <CesiumGeometry/Transforms.h>
 #include <CesiumGeospatial/Ellipsoid.h>
 #include <CesiumGltf/AccessorView.h>
+#include <CesiumGltf/AccessorUtility.h>
 #include <CesiumGltf/ExtensionExtMeshFeatures.h>
+#include <CesiumGltf/ExtensionExtMeshGpuInstancing.h>
 #include <CesiumGltf/ExtensionKhrMaterialsUnlit.h>
 #include <CesiumGltf/ExtensionKhrTextureTransform.h>
 #include <CesiumGltf/ExtensionModelExtStructuralMetadata.h>
 #include <CesiumGltf/KhrTextureTransform.h>
+#include <Cesium3DTilesContent/GltfConverterUtility.h>
 #include <CesiumGltfContent/GltfUtilities.h>
 #include <CesiumGltfReader/GltfReader.h>
 #include <CesiumUtility/ScopeGuard.h>
@@ -25,6 +28,7 @@
 #include <DotNet/CesiumForUnity/CesiumFeatureIdAttribute.h>
 #include <DotNet/CesiumForUnity/CesiumFeatureIdSet.h>
 #include <DotNet/CesiumForUnity/CesiumGeoreference.h>
+#include <DotNet/CesiumForUnity/CesiumGltfInstancedRenderer.h>
 #include <DotNet/CesiumForUnity/CesiumGlobeAnchor.h>
 #include <DotNet/CesiumForUnity/CesiumMetadata.h>
 #include <DotNet/CesiumForUnity/CesiumModelMetadata.h>
@@ -70,6 +74,7 @@
 #include <DotNet/UnityEngine/Vector4.h>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/transform.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1081,6 +1086,141 @@ gltfVectorToUnityVector(const std::vector<double>& values, float defaultValue) {
   return result;
 }
 
+struct GltfInstanceTransform {
+  glm::dvec3 translation = glm::dvec3(0.0);
+  glm::dquat rotation = glm::dquat(1.0, 0.0, 0.0, 0.0);
+  glm::dvec3 scale = glm::dvec3(1.0);
+
+  glm::dmat4 toMatrix() const {
+    return glm::translate(this->translation) *
+           glm::mat4_cast(this->rotation) * glm::scale(this->scale);
+  }
+};
+
+const Accessor* getInstanceAccessor(
+    const Model& model,
+    const ExtensionExtMeshGpuInstancing& instancing,
+    const std::string& name) {
+  auto accessorIt = instancing.attributes.find(name);
+  if (accessorIt == instancing.attributes.end()) {
+    return nullptr;
+  }
+
+  return Model::getSafe(&model.accessors, accessorIt->second);
+}
+
+int64_t getInstanceCount(
+    const Model& model,
+    const ExtensionExtMeshGpuInstancing& instancing) {
+  int64_t count = 0;
+  for (const auto& attribute : instancing.attributes) {
+    const Accessor* pAccessor =
+        Model::getSafe(&model.accessors, attribute.second);
+    if (!pAccessor) {
+      return 0;
+    }
+
+    if (count == 0) {
+      count = pAccessor->count;
+    } else if (count != pAccessor->count) {
+      return 0;
+    }
+  }
+
+  return count;
+}
+
+std::vector<GltfInstanceTransform> getInstanceTransforms(
+    const Model& model,
+    const Node& node) {
+  const ExtensionExtMeshGpuInstancing* pInstancing =
+      node.getExtension<ExtensionExtMeshGpuInstancing>();
+  if (!pInstancing || pInstancing->attributes.empty()) {
+    return {};
+  }
+
+  int64_t instanceCount = getInstanceCount(model, *pInstancing);
+  if (instanceCount <= 0) {
+    return {};
+  }
+
+  std::vector<GltfInstanceTransform> result(
+      static_cast<size_t>(instanceCount));
+
+  const Accessor* pTranslations =
+      getInstanceAccessor(model, *pInstancing, "TRANSLATION");
+  if (pTranslations) {
+    AccessorView<AccessorTypes::VEC3<float>> translationView(
+        model,
+        *pTranslations);
+    if (translationView.status() != AccessorViewStatus::Valid) {
+      return {};
+    }
+
+    for (int64_t i = 0; i < instanceCount; ++i) {
+      result[static_cast<size_t>(i)].translation =
+          Cesium3DTilesContent::GltfConverterUtility::toGlm<glm::dvec3>(
+              translationView[i]);
+    }
+  }
+
+  const Accessor* pRotations =
+      getInstanceAccessor(model, *pInstancing, "ROTATION");
+  if (pRotations) {
+    QuaternionAccessorType rotationView =
+        getQuaternionAccessorView(model, pRotations);
+    bool valid = std::visit(
+        [](const auto& view) {
+          return view.status() == AccessorViewStatus::Valid;
+        },
+        rotationView);
+    if (!valid) {
+      return {};
+    }
+
+    std::visit(
+        [&result, instanceCount](const auto& view) {
+          for (int64_t i = 0; i < instanceCount; ++i) {
+            result[static_cast<size_t>(i)].rotation =
+                Cesium3DTilesContent::GltfConverterUtility::toGlmQuat<
+                    glm::dquat>(view[i]);
+          }
+        },
+        rotationView);
+  }
+
+  const Accessor* pScales = getInstanceAccessor(model, *pInstancing, "SCALE");
+  if (pScales) {
+    AccessorView<AccessorTypes::VEC3<float>> scaleView(model, *pScales);
+    if (scaleView.status() != AccessorViewStatus::Valid) {
+      return {};
+    }
+
+    for (int64_t i = 0; i < instanceCount; ++i) {
+      result[static_cast<size_t>(i)].scale =
+          Cesium3DTilesContent::GltfConverterUtility::toGlm<glm::dvec3>(
+              scaleView[i]);
+    }
+  }
+
+  return result;
+}
+
+System::Array1<UnityEngine::Matrix4x4> makeUnityMatrixArray(
+    const std::vector<GltfInstanceTransform>& transforms) {
+  System::Array1<UnityEngine::Matrix4x4> result(
+      static_cast<int32_t>(transforms.size()));
+
+  for (int32_t i = 0, len = result.Length(); i < len; ++i) {
+    result.Item(
+        i,
+        UnityTransforms::toUnity(
+            transforms[static_cast<size_t>(i)].toMatrix()));
+  }
+
+  return result;
+}
+
 void setGltfMaterialParameterValues(
     const CesiumGltf::Model& model,
     const CesiumPrimitiveInfo& primitiveInfo,
@@ -1552,11 +1692,12 @@ void* UnityPrepareRendererResources::prepareInMainThread(
             primitiveGameObject.AddComponent<UnityEngine::MeshFilter>();
         meshFilter.sharedMesh(unityMesh);
 
-        UnityEngine::MeshRenderer meshRenderer =
-            primitiveGameObject.AddComponent<UnityEngine::MeshRenderer>();
-
         const Material* pMaterial =
             Model::getSafe(&gltf.materials, primitive.material);
+
+        std::vector<GltfInstanceTransform> instanceTransforms =
+            getInstanceTransforms(gltf, node);
+        const bool hasInstances = !instanceTransforms.empty();
 
         UnityEngine::Material opaqueMaterial =
             tilesetComponent.opaqueMaterial();
@@ -1576,7 +1717,6 @@ void* UnityPrepareRendererResources::prepareInMainThread(
         UnityEngine::Material material =
             UnityEngine::Object::Instantiate(opaqueMaterial);
         material.hideFlags(UnityEngine::HideFlags::HideAndDontSave);
-        meshRenderer.material(material);
         if (pMaterial) {
           setGltfMaterialParameterValues(
               gltf,
@@ -1584,6 +1724,92 @@ void* UnityPrepareRendererResources::prepareInMainThread(
               *pMaterial,
               material,
               materialProperties);
+        }
+
+        if (hasInstances && !primitiveInfo.containsPoints) {
+          CesiumForUnity::CesiumGltfInstancedRenderer instancedRenderer =
+              primitiveGameObject
+                  .AddComponent<CesiumForUnity::CesiumGltfInstancedRenderer>();
+          instancedRenderer.mesh(unityMesh);
+          instancedRenderer.material(material);
+          instancedRenderer.instanceLocalMatrices(
+              makeUnityMatrixArray(instanceTransforms));
+
+          UnityEngine::GameObject materialGameObject(System::String(
+              "Instanced Material"));
+          if (showTilesInHierarchy) {
+            materialGameObject.hideFlags(UnityEngine::HideFlags::DontSave);
+          } else {
+            materialGameObject.hideFlags(
+                UnityEngine::HideFlags::DontSave |
+                UnityEngine::HideFlags::HideInHierarchy);
+          }
+
+          materialGameObject.transform().parent(
+              primitiveGameObject.transform());
+          materialGameObject.layer(tilesetLayer);
+          UnityEngine::MeshRenderer materialRenderer =
+              materialGameObject.AddComponent<UnityEngine::MeshRenderer>();
+          materialRenderer.material(material);
+
+          for (size_t i = 0; i < instanceTransforms.size(); ++i) {
+            const GltfInstanceTransform& instanceTransform =
+                instanceTransforms[i];
+
+            UnityEngine::GameObject instanceGameObject(System::String(
+                "Instance " + std::to_string(i)));
+            if (showTilesInHierarchy) {
+              instanceGameObject.hideFlags(UnityEngine::HideFlags::DontSave);
+            } else {
+              instanceGameObject.hideFlags(
+                  UnityEngine::HideFlags::DontSave |
+                  UnityEngine::HideFlags::HideInHierarchy);
+            }
+
+            instanceGameObject.transform().parent(
+                primitiveGameObject.transform());
+            instanceGameObject.layer(tilesetLayer);
+            instanceGameObject.transform().localPosition(
+                UnityTransforms::toUnity(instanceTransform.translation));
+            instanceGameObject.transform().localRotation(
+                UnityTransforms::toUnity(instanceTransform.rotation));
+            instanceGameObject.transform().localScale(
+                UnityTransforms::toUnity(instanceTransform.scale));
+
+            if (createPhysicsMeshes) {
+              UnityEngine::MeshFilter instanceMeshFilter =
+                  instanceGameObject.AddComponent<UnityEngine::MeshFilter>();
+              instanceMeshFilter.sharedMesh(unityMesh);
+
+              if (!isDegenerateTriangleMesh(unityMesh)) {
+                UnityEngine::MeshCollider meshCollider =
+                    instanceGameObject.AddComponent<UnityEngine::MeshCollider>();
+                meshCollider.sharedMesh(unityMesh);
+              }
+
+              // For backwards compatibility.
+              if (metadataComponent != nullptr) {
+                metadataComponent.NativeImplementation().addMetadata(
+                    instanceGameObject.transform().GetInstanceID(),
+                    &gltf,
+                    &primitive);
+              } else {
+                const ExtensionExtMeshFeatures* pFeatures =
+                    primitive.getExtension<ExtensionExtMeshFeatures>();
+                if (pFeatures) {
+                  CesiumFeaturesMetadataUtility::addPrimitiveFeatures(
+                      instanceGameObject,
+                      gltf,
+                      primitive,
+                      *pFeatures);
+                }
+              }
+            }
+          }
+        } else {
+          UnityEngine::MeshRenderer meshRenderer =
+              primitiveGameObject.AddComponent<UnityEngine::MeshRenderer>();
+          meshRenderer.material(material);
         }
 
         if (primitiveInfo.containsPoints) {
@@ -1616,7 +1842,7 @@ void* UnityPrepareRendererResources::prepareInMainThread(
           pointCloudRenderer.tileInfo(tileInfo);
         }
 
-        if (createPhysicsMeshes) {
+        if (createPhysicsMeshes && !hasInstances) {
           if (!primitiveInfo.containsPoints &&
               !isDegenerateTriangleMesh(unityMesh)) {
             // This should not trigger mesh baking for physics, because the
@@ -1628,6 +1854,10 @@ void* UnityPrepareRendererResources::prepareInMainThread(
         }
 
         // For backwards compatibility.
+        if (hasInstances && !primitiveInfo.containsPoints) {
+          return;
+        }
+
         if (metadataComponent != nullptr) {
           metadataComponent.NativeImplementation().addMetadata(
               primitiveGameObject.transform().GetInstanceID(),
@@ -1676,36 +1906,92 @@ void freePrimitiveFeatures(
   }
 }
 
-void freePrimitiveGameObject(
+void freePrimitiveMetadata(
     const DotNet::UnityEngine::GameObject& primitiveGameObject,
     const DotNet::CesiumForUnity::CesiumMetadata& metadataComponent) {
-  // Kept for backwards compatibility.
   if (metadataComponent != nullptr) {
     metadataComponent.NativeImplementation().removeMetadata(
         primitiveGameObject.transform().GetInstanceID());
   } else {
     freePrimitiveFeatures(primitiveGameObject);
   }
+}
 
+void freeDescendantPrimitiveMetadata(
+    const DotNet::UnityEngine::Transform& transform,
+    const DotNet::CesiumForUnity::CesiumMetadata& metadataComponent) {
+  for (int32_t i = transform.childCount() - 1; i >= 0; --i) {
+    UnityEngine::Transform childTransform = transform.GetChild(i);
+    UnityEngine::GameObject childGameObject = childTransform.gameObject();
+    freePrimitiveMetadata(childGameObject, metadataComponent);
+    freeDescendantPrimitiveMetadata(childTransform, metadataComponent);
+  }
+}
+
+void destroyMaterialResources(const UnityEngine::Material& material) {
+  if (material == nullptr) {
+    return;
+  }
+
+  System::Collections::Generic::List1<int> textureIDs;
+  material.GetTexturePropertyNameIDs(textureIDs);
+  for (int32_t i = 0, len = textureIDs.Count(); i < len; ++i) {
+    int32_t textureID = textureIDs[i];
+    UnityEngine::Texture texture = material.GetTexture(textureID);
+    if (texture != nullptr &&
+        (texture.hideFlags() & UnityEngine::HideFlags::HideAndDontSave) ==
+            UnityEngine::HideFlags::HideAndDontSave) {
+      UnityLifetime::Destroy(texture);
+    }
+  }
+
+  UnityLifetime::Destroy(material);
+}
+
+void destroyRendererMaterials(
+    const UnityEngine::Transform& transform) {
+  UnityEngine::GameObject gameObject = transform.gameObject();
+  UnityEngine::MeshRenderer meshRenderer =
+      gameObject.GetComponent<UnityEngine::MeshRenderer>();
+  if (meshRenderer != nullptr) {
+    destroyMaterialResources(meshRenderer.sharedMaterial());
+  }
+
+  for (int32_t i = transform.childCount() - 1; i >= 0; --i) {
+    UnityEngine::Transform childTransform = transform.GetChild(i);
+    destroyRendererMaterials(childTransform);
+  }
+}
+
+UnityEngine::Material getPrimitiveMaterial(
+    const UnityEngine::GameObject& primitiveGameObject) {
   UnityEngine::MeshRenderer meshRenderer =
       primitiveGameObject.GetComponent<UnityEngine::MeshRenderer>();
   if (meshRenderer != nullptr) {
-    UnityEngine::Material material = meshRenderer.sharedMaterial();
-
-    System::Collections::Generic::List1<int> textureIDs;
-    material.GetTexturePropertyNameIDs(textureIDs);
-    for (int32_t i = 0, len = textureIDs.Count(); i < len; ++i) {
-      int32_t textureID = textureIDs[i];
-      UnityEngine::Texture texture = material.GetTexture(textureID);
-      if (texture != nullptr &&
-          (texture.hideFlags() & UnityEngine::HideFlags::HideAndDontSave) ==
-              UnityEngine::HideFlags::HideAndDontSave) {
-        UnityLifetime::Destroy(texture);
-      }
-    }
-
-    UnityLifetime::Destroy(material);
+    return meshRenderer.sharedMaterial();
   }
+
+  UnityEngine::Transform transform = primitiveGameObject.transform();
+  for (int32_t i = 0, len = transform.childCount(); i < len; ++i) {
+    UnityEngine::GameObject child = transform.GetChild(i).gameObject();
+    meshRenderer = child.GetComponent<UnityEngine::MeshRenderer>();
+    if (meshRenderer != nullptr) {
+      return meshRenderer.sharedMaterial();
+    }
+  }
+
+  return UnityEngine::Material(nullptr);
+}
+
+void freePrimitiveGameObject(
+    const DotNet::UnityEngine::GameObject& primitiveGameObject,
+    const DotNet::CesiumForUnity::CesiumMetadata& metadataComponent) {
+  freePrimitiveMetadata(primitiveGameObject, metadataComponent);
+  freeDescendantPrimitiveMetadata(
+      primitiveGameObject.transform(),
+      metadataComponent);
+
+  destroyRendererMaterials(primitiveGameObject.transform());
 
   UnityEngine::MeshFilter meshFilter =
       primitiveGameObject.GetComponent<UnityEngine::MeshFilter>();
@@ -1862,12 +2148,7 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     if (child == nullptr)
       continue;
 
-    UnityEngine::MeshRenderer meshRenderer =
-        child.GetComponent<UnityEngine::MeshRenderer>();
-    if (meshRenderer == nullptr)
-      continue;
-
-    UnityEngine::Material material = meshRenderer.sharedMaterial();
+    UnityEngine::Material material = getPrimitiveMaterial(child);
     if (material == nullptr)
       continue;
 
@@ -1912,6 +2193,11 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     if (maybeID) {
       material.SetVector(*maybeID, translationAndScale);
     }
+
+    maybeID = this->_materialProperties.getOverlayEnabledID(key);
+    if (maybeID) {
+      material.SetFloat(*maybeID, 1.0f);
+    }
   }
 }
 
@@ -1937,6 +2223,8 @@ void UnityPrepareRendererResources::detachRasterInMainThread(
       *pTexture == nullptr)
     return;
 
+  std::string key = rasterTile.getOverlay().getName();
+
   UnityEngine::Transform transform =
       pCesiumGameObject->pGameObject->transform();
   for (int32_t i = 0, len = transform.childCount(); i < len; ++i) {
@@ -1948,19 +2236,18 @@ void UnityPrepareRendererResources::detachRasterInMainThread(
     if (child == nullptr)
       continue;
 
-    UnityEngine::MeshRenderer meshRenderer =
-        child.GetComponent<UnityEngine::MeshRenderer>();
-    if (meshRenderer == nullptr)
-      continue;
-
-    UnityEngine::Material material = meshRenderer.sharedMaterial();
+    UnityEngine::Material material = getPrimitiveMaterial(child);
     if (material == nullptr)
       continue;
 
-    auto maybeID = this->_materialProperties.getOverlayTextureID(
-        rasterTile.getOverlay().getName());
+    auto maybeID = this->_materialProperties.getOverlayTextureID(key);
     if (maybeID) {
       material.SetTexture(*maybeID, UnityEngine::Texture(nullptr));
+    }
+
+    maybeID = this->_materialProperties.getOverlayEnabledID(key);
+    if (maybeID) {
+      material.SetFloat(*maybeID, 0.0f);
     }
   }
 }

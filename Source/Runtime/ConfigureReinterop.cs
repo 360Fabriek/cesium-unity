@@ -160,6 +160,15 @@ namespace CesiumForUnity
             GameObject meshGameObject = meshRenderer.gameObject;
             meshRenderer.material = UnityEngine.Object.Instantiate(meshRenderer.material);
 
+            CesiumGltfInstancedRenderer instancedRenderer =
+                go.AddComponent<CesiumGltfInstancedRenderer>();
+            instancedRenderer.mesh = mesh;
+            instancedRenderer.material = meshRenderer.material;
+            instancedRenderer.instanceLocalMatrices = new[] { Matrix4x4.identity };
+            Matrix4x4[] instanceLocalMatrices =
+                instancedRenderer.instanceLocalMatrices;
+            Material instancedMaterial = instancedRenderer.material;
+
             int id = Shader.PropertyToID("name");
             int crc = meshRenderer.material.ComputeCRC();
             meshRenderer.material.SetTexture(id, texture2D);

@@ -82,6 +82,8 @@ const std::string
         "_overlayTextureCoordinateIndex_";
 const std::string TilesetMaterialProperties::_overlayTranslationAndScalePrefix =
     "_overlayTranslationAndScale_";
+const std::string TilesetMaterialProperties::_overlayEnabledPrefix =
+    "_overlayEnabled_";
 #pragma endregion
 
 TilesetMaterialProperties::TilesetMaterialProperties()
@@ -133,7 +135,8 @@ TilesetMaterialProperties::TilesetMaterialProperties()
           Shader::PropertyToID(System::String(_occlusionTextureRotationName))),
       _overlayTextureCoordinateIndexIDs(),
       _overlayTextureIDs(),
-      _overlayTranslationAndScaleIDs() {}
+      _overlayTranslationAndScaleIDs(),
+      _overlayEnabledIDs() {}
 
 const std::optional<int32_t>
 TilesetMaterialProperties::getOverlayTextureCoordinateIndexID(
@@ -164,6 +167,16 @@ TilesetMaterialProperties::getOverlayTranslationAndScaleID(
   return this->_overlayTranslationAndScaleIDs.at(key);
 }
 
+const std::optional<int32_t>
+TilesetMaterialProperties::getOverlayEnabledID(
+    const std::string& key) const noexcept {
+  auto iter = this->_overlayEnabledIDs.find(key);
+  if (iter == this->_overlayEnabledIDs.end()) {
+    return std::nullopt;
+  }
+  return this->_overlayEnabledIDs.at(key);
+}
+
 void TilesetMaterialProperties::updateOverlayParameterIDs(
     const std::vector<std::string>& overlayMaterialKeys) {
   const size_t size = overlayMaterialKeys.size();
@@ -171,11 +184,13 @@ void TilesetMaterialProperties::updateOverlayParameterIDs(
   this->_overlayTextureIDs.reserve(size);
   this->_overlayTextureCoordinateIndexIDs.reserve(size);
   this->_overlayTranslationAndScaleIDs.reserve(size);
+  this->_overlayEnabledIDs.reserve(size);
 
   System::String texturePrefix(_overlayTexturePrefix);
   System::String textureCoordinateIndexPrefix(
       _overlayTextureCoordinateIndexPrefix);
   System::String translationAndScalePrefix(_overlayTranslationAndScalePrefix);
+  System::String enabledPrefix(_overlayEnabledPrefix);
 
   std::unordered_set<std::string> uniqueKeys;
 
@@ -203,6 +218,9 @@ void TilesetMaterialProperties::updateOverlayParameterIDs(
         {keyStlString,
          Shader::PropertyToID(
              System::String::Concat(translationAndScalePrefix, key))});
+    this->_overlayEnabledIDs.insert(
+        {keyStlString,
+         Shader::PropertyToID(System::String::Concat(enabledPrefix, key))});
   }
 }
 

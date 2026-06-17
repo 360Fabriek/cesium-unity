@@ -92,6 +92,8 @@ public:
   getOverlayTextureID(const std::string& key) const noexcept;
   const std::optional<int32_t>
   getOverlayTranslationAndScaleID(const std::string& key) const noexcept;
+  const std::optional<int32_t>
+  getOverlayEnabledID(const std::string& key) const noexcept;
 
   void updateOverlayParameterIDs(
       const std::vector<std::string>& overlayMaterialKeys);
@@ -131,6 +133,7 @@ private:
   std::unordered_map<std::string, int32_t> _overlayTextureCoordinateIndexIDs;
   std::unordered_map<std::string, int32_t> _overlayTextureIDs;
   std::unordered_map<std::string, int32_t> _overlayTranslationAndScaleIDs;
+  std::unordered_map<std::string, int32_t> _overlayEnabledIDs;
 
   static const std::string _doubleSidedEnableName;
   static const std::string _cullName;
@@ -166,6 +169,7 @@ private:
   static const std::string _overlayTexturePrefix;
   static const std::string _overlayTextureCoordinateIndexPrefix;
   static const std::string _overlayTranslationAndScalePrefix;
+  static const std::string _overlayEnabledPrefix;
 };
 
 } // namespace CesiumForUnityNative
