@@ -109,10 +109,9 @@ namespace CesiumForUnity
             _mesh = GetComponent<MeshFilter>().sharedMesh;
             MeshRenderer source = GetComponent<MeshRenderer>();
             _material = source.sharedMaterial;
-            _material.enableInstancing = true;
-            // Keep the overlay clip path in depth and shadow passes in all targets.
-            foreach (string property in new[] { "_AlphaClip", "_BUILTIN_AlphaClip", "_AlphaCutoffEnable" })
-                if (_material.HasProperty(property)) _material.SetFloat(property, 1.0f);
+            // Preserve the source surface state. The stock Cesium graphs already
+            // provide alpha-tested depth/shadow passes for raster clipping.
+            PrepareMaterialForInstancing(_material);
             _canInstance = SystemInfo.supportsInstancing && _material.renderQueue < 3000 && IsCesiumShader(_material.shader);
             source.enabled = false;
             _anchor = GetComponent<CesiumGlobeAnchor>();
@@ -134,8 +133,9 @@ namespace CesiumForUnity
             double s = Math.Sin(_latitude), c = Math.Cos(_latitude);
             double e2 = 1.0 - radii.z * radii.z / (radii.x * radii.x);
             _properties = new MaterialPropertyBlock();
-            // Keep non-raster overrides set by the existing GameObject-created callback.
-            source.GetPropertyBlock(_properties);
+            // Preserve Unity's material-slot override precedence, including
+            // overrides set by the existing GameObject-created callback.
+            CopySourceMaterialProperties(source, _properties);
             // An unattached overlay must not sample the prototype's geographic UVs.
             // Preserve material texture references: they are not owned by this renderer.
             foreach (string textureName in _material.GetTexturePropertyNames())
@@ -163,6 +163,7 @@ namespace CesiumForUnity
             };
             Cesium3DTileset tileset = GetComponentInParent<Cesium3DTileset>();
             var settings = tileset.GetComponent<CesiumInstancedRendering>();
+            _materialDiagnosticSettings = settings;
             int maximum = settings == null ? 128 : Mathf.Clamp(settings.maximumInstancesPerBatch, 1, 128);
             double cellSize = settings == null ? 128.0 : Math.Max(1.0, settings.spatialBatchSize);
             InitializeIntegration(source, maximum, cellSize, clipCoverage, coverageBoxToEcef);
@@ -337,10 +338,13 @@ namespace CesiumForUnity
             parameters.shadowCastingMode = _sourceRenderer.shadowCastingMode;
             parameters.receiveShadows = _sourceRenderer.receiveShadows;
             parameters.renderingLayerMask = _sourceRenderer.renderingLayerMask;
+            parameters.lightProbeUsage = _sourceRenderer.lightProbeUsage;
+            parameters.reflectionProbeUsage = _sourceRenderer.reflectionProbeUsage;
+            bool useGpuInstancing = UseGpuInstancingForDraw;
             foreach (Batch batch in _batches)
             {
                 parameters.worldBounds = batch.bounds;
-                if (_canInstance)
+                if (useGpuInstancing)
                     Graphics.RenderMeshInstanced(parameters, _mesh, 0, batch.matrices);
                 else
                     for (int i = 0; i < batch.matrices.Length; ++i)
