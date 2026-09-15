@@ -76,6 +76,7 @@
 #include <array>
 #include <cstddef>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 
 using namespace CesiumRasterOverlays;
@@ -694,9 +695,18 @@ void populateMeshDataArray(
 
   meshDataResult.primitiveInfos.reserve(countPrimitives(*pModel));
 
+  // Decode on the worker thread once per node, not once per primitive.
+  std::unordered_map<
+      const Node*,
+      std::shared_ptr<const GltfInstanceTransforms>> instanceTransforms;
+
   pModel->forEachPrimitiveInScene(
       -1,
-      [&meshDataResult, &meshDataInstance, pModel, &options](
+      [&meshDataResult,
+       &meshDataInstance,
+       &instanceTransforms,
+       pModel,
+       &options](
           const Model& gltf,
           const Node& node,
           const Mesh& mesh,
@@ -706,6 +716,16 @@ void populateMeshDataArray(
             meshDataResult.meshDataArray[meshDataInstance++];
         CesiumPrimitiveInfo& primitiveInfo =
             meshDataResult.primitiveInfos.emplace_back();
+
+        if (const auto* pExtension =
+                node.getExtension<ExtensionExtMeshGpuInstancing>()) {
+          auto& pTransforms = instanceTransforms[&node];
+          if (!pTransforms) {
+            pTransforms = std::make_shared<const GltfInstanceTransforms>(
+                readGltfInstanceTransforms(gltf, *pExtension));
+          }
+          primitiveInfo.pInstanceTransforms = pTransforms;
+        }
 
         auto positionAccessorIt = primitive.attributes.find("POSITION");
         if (positionAccessorIt == primitive.attributes.end()) {
@@ -1455,6 +1475,9 @@ void* UnityPrepareRendererResources::prepareInMainThread(
   const bool createPhysicsMeshes = tilesetComponent.createPhysicsMeshes();
 
   int32_t meshIndex = 0;
+  std::unordered_map<uint64_t, size_t> primitiveInfoByGameObject;
+  std::vector<UnityEngine::Material> ownedMaterials;
+  std::unordered_set<const GltfInstanceTransforms*> reportedInstanceErrors;
 
   // For backwards compatibility.
   CesiumForUnity::CesiumMetadata metadataComponent =
@@ -1481,6 +1504,9 @@ void* UnityPrepareRendererResources::prepareInMainThread(
        &pModelGameObject,
        &tileTransform,
        &meshIndex,
+       &primitiveInfoByGameObject,
+       &ownedMaterials,
+       &reportedInstanceErrors,
        &tilesetComponent,
        pCoordinateSystem,
        createPhysicsMeshes,
@@ -1517,140 +1543,179 @@ void* UnityPrepareRendererResources::prepareInMainThread(
           return;
         }
 
-        int64_t primitiveIndex = &primitive - &mesh.primitives[0];
-        UnityEngine::GameObject primitiveGameObject(System::String(
-            "Mesh " + std::to_string(meshIndex - 1) + " Primitive " +
-            std::to_string(primitiveIndex)));
-        if (showTilesInHierarchy) {
-          primitiveGameObject.hideFlags(UnityEngine::HideFlags::DontSave);
-        } else {
-          primitiveGameObject.hideFlags(
-              UnityEngine::HideFlags::DontSave |
-              UnityEngine::HideFlags::HideInHierarchy);
+        const auto& pInstances = primitiveInfo.pInstanceTransforms;
+        if (pInstances && !pInstances->error.empty()) {
+          if (reportedInstanceErrors.insert(pInstances.get()).second) {
+            UnityEngine::Debug::LogWarning(System::String(pInstances->error));
+          }
+          return;
         }
-
-        primitiveGameObject.transform().parent(pModelGameObject->transform());
-        primitiveGameObject.layer(tilesetLayer);
-        glm::dmat4 modelToEcef = tileTransform * transform;
-
-        CesiumForUnity::CesiumGlobeAnchor anchor =
-            primitiveGameObject
-                .AddComponent<CesiumForUnity::CesiumGlobeAnchor>();
-        anchor.detectTransformChanges(false);
-        anchor.adjustOrientationForGlobeWhenMoving(false);
-        anchor.localToGlobeFixedMatrix(
-            UnityTransforms::toUnityMathematics(modelToEcef));
-
-        UnityEngine::MeshFilter meshFilter =
-            primitiveGameObject.AddComponent<UnityEngine::MeshFilter>();
-        meshFilter.sharedMesh(unityMesh);
-
-        UnityEngine::MeshRenderer meshRenderer =
-            primitiveGameObject.AddComponent<UnityEngine::MeshRenderer>();
-
-        const Material* pMaterial =
-            Model::getSafe(&gltf.materials, primitive.material);
-
-        UnityEngine::Material opaqueMaterial =
-            tilesetComponent.opaqueMaterial();
-
-        if (opaqueMaterial == nullptr) {
-          if (primitiveInfo.isUnlit) {
-            opaqueMaterial =
-                UnityEngine::Resources::Load<UnityEngine::Material>(
-                    System::String("CesiumUnlitTilesetMaterial"));
+        const size_t instanceCount =
+            pInstances ? pInstances->transforms.size() : 1;
+        UnityEngine::Material material(nullptr);
+        for (size_t instanceIndex = 0; instanceIndex < instanceCount;
+             ++instanceIndex) {
+          int64_t primitiveIndex = &primitive - &mesh.primitives[0];
+          UnityEngine::GameObject primitiveGameObject(System::String(
+              "Mesh " + std::to_string(meshIndex - 1) + " Primitive " +
+              std::to_string(primitiveIndex) +
+              (pInstances ? " Instance " + std::to_string(instanceIndex) : "")));
+          if (showTilesInHierarchy) {
+            primitiveGameObject.hideFlags(UnityEngine::HideFlags::DontSave);
           } else {
-            opaqueMaterial =
-                UnityEngine::Resources::Load<UnityEngine::Material>(
-                    System::String("CesiumDefaultTilesetMaterial"));
+            primitiveGameObject.hideFlags(
+                UnityEngine::HideFlags::DontSave |
+                UnityEngine::HideFlags::HideInHierarchy);
           }
-        }
 
-        UnityEngine::Material material =
-            UnityEngine::Object::Instantiate(opaqueMaterial);
-        material.hideFlags(UnityEngine::HideFlags::HideAndDontSave);
-        meshRenderer.material(material);
-        if (pMaterial) {
-          setGltfMaterialParameterValues(
-              gltf,
-              primitiveInfo,
-              *pMaterial,
-              material,
-              materialProperties);
-        }
+          primitiveGameObject.transform().parent(pModelGameObject->transform());
+          primitiveGameObject.layer(tilesetLayer);
+          // Keep this multiplication in double precision. Unlike Unreal,
+          // Unity's vertex buffers here are still in glTF coordinates.
+          const glm::dmat4 instanceTransform = pInstances
+              ? pInstances->transforms[instanceIndex]
+              : glm::dmat4(1.0);
+          const glm::dmat4 modelToEcef =
+              tileTransform * transform * instanceTransform;
 
-        if (primitiveInfo.mode == CesiumGltf::MeshPrimitive::Mode::POINTS) {
-          CesiumForUnity::CesiumPointCloudRenderer pointCloudRenderer =
+          CesiumForUnity::CesiumGlobeAnchor anchor =
               primitiveGameObject
-                  .AddComponent<CesiumForUnity::CesiumPointCloudRenderer>();
+                  .AddComponent<CesiumForUnity::CesiumGlobeAnchor>();
+          anchor.detectTransformChanges(false);
+          anchor.adjustOrientationForGlobeWhenMoving(false);
+          anchor.localToGlobeFixedMatrix(
+              UnityTransforms::toUnityMathematics(modelToEcef));
 
-          CesiumForUnity::Cesium3DTileInfo tileInfo;
-          tileInfo.usesAdditiveRefinement =
-              tile.getRefine() == Cesium3DTilesSelection::TileRefine::Add;
-          tileInfo.geometricError =
-              static_cast<float>(tile.getGeometricError());
+          UnityEngine::MeshFilter meshFilter =
+              primitiveGameObject.AddComponent<UnityEngine::MeshFilter>();
+          meshFilter.sharedMesh(unityMesh);
 
-          // TODO: can we make AccessorView retrieve the min/max for us?
-          const Accessor* pPositionAccessor =
-              Model::getSafe(&gltf.accessors, positionAccessorID);
-          glm::vec3 min(
-              pPositionAccessor->min[0],
-              pPositionAccessor->min[1],
-              pPositionAccessor->min[2]);
-          glm::vec3 max(
-              pPositionAccessor->max[0],
-              pPositionAccessor->max[1],
-              pPositionAccessor->max[2]);
-          glm::vec3 dimensions(transform * glm::dvec4(max - min, 0));
+          UnityEngine::MeshRenderer meshRenderer =
+              primitiveGameObject.AddComponent<UnityEngine::MeshRenderer>();
 
-          tileInfo.dimensions =
-              UnityEngine::Vector3{dimensions.x, dimensions.y, dimensions.z};
-          tileInfo.isTranslucent = primitiveInfo.isTranslucent;
-          pointCloudRenderer.tileInfo(tileInfo);
-        }
+          if (material == nullptr) {
+            const Material* pMaterial =
+                Model::getSafe(&gltf.materials, primitive.material);
 
-        if (createPhysicsMeshes) {
-          switch (primitiveInfo.mode) {
-          case CesiumGltf::MeshPrimitive::Mode::POINTS:
-          case CesiumGltf::MeshPrimitive::Mode::LINES:
-            break;
-          default:
-            if (!isDegenerateTriangleMesh(unityMesh)) {
-              // This should not trigger mesh baking for physics, because the
-              // meshes were already baked in the worker thread.
-              UnityEngine::MeshCollider meshCollider =
-                  primitiveGameObject.AddComponent<UnityEngine::MeshCollider>();
-              meshCollider.sharedMesh(unityMesh);
+            UnityEngine::Material opaqueMaterial =
+                tilesetComponent.opaqueMaterial();
+
+            if (opaqueMaterial == nullptr) {
+              if (primitiveInfo.isUnlit) {
+                opaqueMaterial =
+                    UnityEngine::Resources::Load<UnityEngine::Material>(
+                        System::String("CesiumUnlitTilesetMaterial"));
+              } else {
+                opaqueMaterial =
+                    UnityEngine::Resources::Load<UnityEngine::Material>(
+                        System::String("CesiumDefaultTilesetMaterial"));
+              }
             }
-            break;
-          }
-        }
 
-        // For backwards compatibility.
-        if (metadataComponent != nullptr) {
-          metadataComponent.NativeImplementation().addMetadata(
-              CesiumForUnity::Helpers::GetObjectId(
-                  primitiveGameObject.transform()),
-              &gltf,
-              &primitive);
-        } else {
-          const ExtensionExtMeshFeatures* pFeatures =
-              primitive.getExtension<ExtensionExtMeshFeatures>();
-          if (pFeatures) {
-            CesiumFeaturesMetadataUtility::addPrimitiveFeatures(
-                primitiveGameObject,
-                gltf,
-                primitive,
-                *pFeatures);
+            material = UnityEngine::Object::Instantiate(opaqueMaterial);
+            material.hideFlags(UnityEngine::HideFlags::HideAndDontSave);
+            ownedMaterials.emplace_back(material);
+            if (pInstances) {
+              material.enableInstancing(true);
+            }
+            if (pMaterial) {
+              setGltfMaterialParameterValues(
+                  gltf,
+                  primitiveInfo,
+                  *pMaterial,
+                  material,
+                  materialProperties);
+            }
           }
+          meshRenderer.sharedMaterial(material);
+
+          if (primitiveInfo.mode == CesiumGltf::MeshPrimitive::Mode::POINTS) {
+            CesiumForUnity::CesiumPointCloudRenderer pointCloudRenderer =
+                primitiveGameObject
+                    .AddComponent<CesiumForUnity::CesiumPointCloudRenderer>();
+
+            CesiumForUnity::Cesium3DTileInfo tileInfo;
+            tileInfo.usesAdditiveRefinement =
+                tile.getRefine() == Cesium3DTilesSelection::TileRefine::Add;
+            tileInfo.geometricError =
+                static_cast<float>(tile.getGeometricError());
+
+            // TODO: can we make AccessorView retrieve the min/max for us?
+            const Accessor* pPositionAccessor =
+                Model::getSafe(&gltf.accessors, positionAccessorID);
+            glm::vec3 min(
+                pPositionAccessor->min[0],
+                pPositionAccessor->min[1],
+                pPositionAccessor->min[2]);
+            glm::vec3 max(
+                pPositionAccessor->max[0],
+                pPositionAccessor->max[1],
+                pPositionAccessor->max[2]);
+            glm::vec3 dimensions(
+                transform * instanceTransform * glm::dvec4(max - min, 0));
+
+            tileInfo.dimensions =
+                UnityEngine::Vector3{dimensions.x, dimensions.y, dimensions.z};
+            tileInfo.isTranslucent = primitiveInfo.isTranslucent;
+            pointCloudRenderer.tileInfo(tileInfo);
+          }
+
+          if (createPhysicsMeshes) {
+            switch (primitiveInfo.mode) {
+            case CesiumGltf::MeshPrimitive::Mode::POINTS:
+            case CesiumGltf::MeshPrimitive::Mode::LINES:
+              break;
+            default:
+              if (!isDegenerateTriangleMesh(unityMesh)) {
+                // This should not trigger mesh baking for physics, because the
+                // meshes were already baked in the worker thread.
+                UnityEngine::MeshCollider meshCollider =
+                    primitiveGameObject.AddComponent<UnityEngine::MeshCollider>();
+                meshCollider.sharedMesh(unityMesh);
+              }
+              break;
+            }
+          }
+
+          // For backwards compatibility.
+          if (metadataComponent != nullptr) {
+            metadataComponent.NativeImplementation().addMetadata(
+                CesiumForUnity::Helpers::GetObjectId(
+                    primitiveGameObject.transform()),
+                &gltf,
+                &primitive);
+          } else {
+            const ExtensionExtMeshFeatures* pFeatures =
+                primitive.getExtension<ExtensionExtMeshFeatures>();
+            if (pFeatures) {
+              CesiumFeaturesMetadataUtility::addPrimitiveFeatures(
+                  primitiveGameObject,
+                  gltf,
+                  primitive,
+                  *pFeatures);
+            }
+          }
+          primitiveInfoByGameObject.emplace(
+              CesiumForUnity::Helpers::GetObjectId(primitiveGameObject),
+              static_cast<size_t>(meshIndex - 1));
         }
       });
 
   tilesetComponent.BroadcastNewGameObjectCreated(*pModelGameObject);
 
+  // Retain every allocated mesh, even when a malformed/empty node produced
+  // no GameObject. Ownership cannot be inferred from the renderer hierarchy.
+  std::vector<UnityEngine::Mesh> ownedMeshes;
+  ownedMeshes.reserve(static_cast<size_t>(meshes.Length()));
+  for (int32_t i = 0; i < meshes.Length(); ++i) {
+    ownedMeshes.emplace_back(meshes[i]);
+  }
   CesiumGltfGameObject* pCesiumGameObject = new CesiumGltfGameObject{
       std::move(pModelGameObject),
-      std::move(pLoadThreadResult->primitiveInfos)};
+      std::move(pLoadThreadResult->primitiveInfos),
+      std::move(primitiveInfoByGameObject),
+      std::move(ownedMeshes),
+      std::move(ownedMaterials)};
 
   return pCesiumGameObject;
 }
@@ -1687,35 +1752,29 @@ void freePrimitiveGameObject(
     freePrimitiveFeatures(primitiveGameObject);
   }
 
-  UnityEngine::MeshRenderer meshRenderer =
-      primitiveGameObject.GetComponent<UnityEngine::MeshRenderer>();
-  if (meshRenderer != nullptr) {
-    UnityEngine::Material material = meshRenderer.sharedMaterial();
+  // Meshes and materials are owned by the tile. Several instance renderers
+  // (and their colliders) may reference the same resources.
+}
 
-    System::Collections::Generic::List1<int> textureIDs;
-    material.GetTexturePropertyNameIDs(textureIDs);
-    for (int32_t i = 0, len = textureIDs.Count(); i < len; ++i) {
-      int32_t textureID = textureIDs[i];
-      UnityEngine::Texture texture = material.GetTexture(textureID);
-      if (texture != nullptr &&
-          (texture.hideFlags() & UnityEngine::HideFlags::HideAndDontSave) ==
-              UnityEngine::HideFlags::HideAndDontSave) {
-        UnityLifetime::Destroy(texture);
-      }
+void freeOwnedMaterial(
+    const UnityEngine::Material& material,
+    std::unordered_set<uint64_t>& destroyedTextures) {
+  if (material == nullptr) {
+    return;
+  }
+  System::Collections::Generic::List1<int> textureIDs;
+  material.GetTexturePropertyNameIDs(textureIDs);
+  for (int32_t i = 0, len = textureIDs.Count(); i < len; ++i) {
+    UnityEngine::Texture texture = material.GetTexture(textureIDs[i]);
+    if (texture != nullptr &&
+        (texture.hideFlags() & UnityEngine::HideFlags::HideAndDontSave) ==
+            UnityEngine::HideFlags::HideAndDontSave &&
+        destroyedTextures.insert(
+            CesiumForUnity::Helpers::GetObjectId(texture)).second) {
+      UnityLifetime::Destroy(texture);
     }
-
-    UnityLifetime::Destroy(material);
   }
-
-  UnityEngine::MeshFilter meshFilter =
-      primitiveGameObject.GetComponent<UnityEngine::MeshFilter>();
-  if (meshFilter != nullptr) {
-    CesiumForUnity::CesiumObjectPools::MeshPool().Release(
-        meshFilter.sharedMesh());
-  }
-
-  // The MeshCollider shares a mesh with the MeshFilter, so no need to
-  // destroy it explicitly.
+  UnityLifetime::Destroy(material);
 }
 
 void freeModelMetadata(const DotNet::UnityEngine::GameObject& modelGameObject) {
@@ -1761,6 +1820,7 @@ void UnityPrepareRendererResources::free(
       // case Unity will throw a MissingReferenceException if we try to use it.
       // So don't do that.
       if (*pCesiumGameObject->pGameObject != nullptr) {
+        pCesiumGameObject->pGameObject->SetActive(false);
         auto metadataComponent =
             pCesiumGameObject->pGameObject->GetComponentInParent<
                 DotNet::CesiumForUnity::CesiumMetadata>();
@@ -1782,6 +1842,18 @@ void UnityPrepareRendererResources::free(
         }
 
         UnityLifetime::Destroy(*pCesiumGameObject->pGameObject);
+      }
+
+      // Release once per tile, including resources whose GameObjects were
+      // already destroyed and meshes from empty/invalid instance groups.
+      std::unordered_set<uint64_t> destroyedTextures;
+      for (const auto& material : pCesiumGameObject->ownedMaterials) {
+        freeOwnedMaterial(material, destroyedTextures);
+      }
+      for (const auto& mesh : pCesiumGameObject->ownedMeshes) {
+        if (mesh != nullptr) {
+          CesiumForUnity::CesiumObjectPools::MeshPool().Release(mesh);
+        }
       }
     }
   } catch (...) {
@@ -1846,10 +1918,8 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
 
   std::string key = rasterTile.getOverlay().getName();
 
-  // We're assuming here that the order of primitives in the transform chain
-  // is the same as the order in the `primitiveInfos`, which should
-  // always be true.
-  uint32_t primitiveIndex = 0;
+  // One source primitive may have many renderers. Use object identity,
+  // rather than child order, so empty nodes and reordered children are safe.
 
   UnityEngine::Transform transform =
       pCesiumGameObject->pGameObject->transform();
@@ -1871,8 +1941,18 @@ void UnityPrepareRendererResources::attachRasterInMainThread(
     if (material == nullptr)
       continue;
 
+    auto sourceIt = pCesiumGameObject->primitiveInfoByGameObject.find(
+        CesiumForUnity::Helpers::GetObjectId(child));
+    if (sourceIt == pCesiumGameObject->primitiveInfoByGameObject.end()) {
+      continue;
+    }
     const CesiumPrimitiveInfo& primitiveInfo =
-        pCesiumGameObject->primitiveInfos[primitiveIndex++];
+        pCesiumGameObject->primitiveInfos[sourceIt->second];
+    if (primitiveInfo.pInstanceTransforms) {
+      // Native's generated overlay UVs are not per-instance. Sharing them
+      // would incorrectly drape every instance with the same imagery.
+      continue;
+    }
 
     // Note: The overlay texture coordinate index corresponds to the glTF
     // attribute _CESIUMOVERLAY_<i>. Here we retrieve the Unity texture

@@ -179,6 +179,7 @@ namespace CesiumForUnity
 
             meshRenderer.material.shaderKeywords = meshRenderer.material.shaderKeywords;
             meshRenderer.sharedMaterial = meshRenderer.sharedMaterial;
+            meshRenderer.sharedMaterial.enableInstancing = true;
             meshRenderer.material.shader = meshRenderer.material.shader;
             UnityEngine.Object.Destroy(meshGameObject);
             UnityEngine.Object.DestroyImmediate(meshGameObject, true);

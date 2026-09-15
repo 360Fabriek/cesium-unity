@@ -1,11 +1,18 @@
 #pragma once
 
+#include "GltfInstanceTransforms.h"
 #include "TilesetMaterialProperties.h"
 
 #include <Cesium3DTilesSelection/IPrepareRendererResources.h>
 
 #include <DotNet/CesiumForUnity/Cesium3DTileset.h>
 #include <DotNet/UnityEngine/GameObject.h>
+#include <DotNet/UnityEngine/Material.h>
+#include <DotNet/UnityEngine/Mesh.h>
+
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 namespace CesiumForUnityNative {
 
@@ -58,6 +65,9 @@ struct CesiumPrimitiveInfo {
    * the corresponding Unity texture coordinate index.
    */
   std::unordered_map<uint32_t, uint32_t> rasterOverlayUvIndexMap{};
+
+  /** Null for ordinary nodes; shared by all primitives of an instanced node. */
+  std::shared_ptr<const GltfInstanceTransforms> pInstanceTransforms{};
 };
 
 /**
@@ -74,6 +84,13 @@ struct CesiumGltfGameObject {
    * meshes.
    */
   std::vector<CesiumPrimitiveInfo> primitiveInfos{};
+
+  /** Source primitive for each renderer, independent of child order. */
+  std::unordered_map<uint64_t, size_t> primitiveInfoByGameObject{};
+
+  /** Tile-owned resources, not per-renderer resources. Release each once. */
+  std::vector<::DotNet::UnityEngine::Mesh> ownedMeshes{};
+  std::vector<::DotNet::UnityEngine::Material> ownedMaterials{};
 };
 
 class UnityPrepareRendererResources
