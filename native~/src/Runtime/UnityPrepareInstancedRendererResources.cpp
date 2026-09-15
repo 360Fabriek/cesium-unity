@@ -20,10 +20,13 @@
 #include <DotNet/CesiumForUnity/CesiumInstancedRenderer.h>
 #include <DotNet/CesiumForUnity/Helpers.h>
 #include <DotNet/System/Array1.h>
+#include <DotNet/System/Object.h>
+#include <DotNet/System/String.h>
 #include <DotNet/Unity/Mathematics/double3.h>
 #include <DotNet/Unity/Mathematics/double4.h>
 #include <DotNet/Unity/Mathematics/double4x4.h>
 #include <DotNet/UnityEngine/Debug.h>
+#include <DotNet/UnityEngine/Object.h>
 #include <DotNet/UnityEngine/Texture.h>
 #include <DotNet/UnityEngine/Transform.h>
 
@@ -136,7 +139,7 @@ std::optional<CesiumGeospatial::BoundingRegion> computeRegion(
   const auto& r = region.getRectangle();
   model.extras[boundsKey] = std::vector<CesiumUtility::JsonValue>{
       r.getWest(), r.getSouth(), r.getEast(), r.getNorth(),
-      region.getMinimumHeight(), region.getMaximumHeight()};
+      region->getMinimumHeight(), region->getMaximumHeight()};
   return region;
 }
 
