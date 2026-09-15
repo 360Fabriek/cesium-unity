@@ -1,7 +1,7 @@
 #include "UnityTilesetExternals.h"
 
 #include "UnityEmscriptenAssetAccessor.h"
-#include "UnityPrepareRendererResources.h"
+#include "UnityPrepareInstancedRendererResources.h"
 #include "UnityTaskProcessor.h"
 #include "UnityWebRequestAssetAccessor.h"
 
@@ -63,7 +63,7 @@ Cesium3DTilesSelection::TilesetExternals
 createTilesetExternals(const CesiumForUnity::Cesium3DTileset& tileset) {
   return TilesetExternals{
       getAssetAccessor(),
-      std::make_shared<UnityPrepareRendererResources>(tileset.gameObject()),
+      std::make_shared<UnityPrepareInstancedRendererResources>(tileset.gameObject()),
       getAsyncSystem(),
       getOrCreateCreditSystem(tileset),
       spdlog::default_logger()};

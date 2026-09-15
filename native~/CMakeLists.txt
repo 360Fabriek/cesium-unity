@@ -143,6 +143,7 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
 endif()
 
 add_subdirectory(extern/cesium-native)
+include(cmake/PatchInstancedRasterUpsampling.cmake)
 
 # Don't build the cesium-native tests by default.
 set_target_properties(cesium-native-tests PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1)
