@@ -6,6 +6,8 @@
 #include <CesiumGeospatial/BoundingRegionBuilder.h>
 #include <CesiumGeospatial/WebMercatorProjection.h>
 #include <CesiumGltfContent/GltfUtilities.h>
+#include <CesiumGltf/ExtensionExtMeshFeatures.h>
+#include <CesiumGltf/Material.h>
 #include <CesiumRasterOverlays/RasterOverlay.h>
 #include <CesiumRasterOverlays/RasterOverlayTile.h>
 #include <CesiumRasterOverlays/RasterOverlayTileProvider.h>
@@ -58,14 +60,21 @@ bool flag(const CesiumGltf::Model& model, const char* key) {
 }
 
 bool eligible(const CesiumGltf::Model& model) {
+  // Keep component-based metadata/picking, skinning and morph workflows on
+  // the existing GameObject path. The batching adapter does not implement them.
+  if (!model.animations.empty() || !model.skins.empty()) return false;
   bool hasInstances = false;
-  bool trianglesOnly = true;
-  model.forEachPrimitiveInScene(-1, [&](const auto&, const auto& node,
+  bool supported = true;
+  model.forEachPrimitiveInScene(-1, [&](const auto& gltf, const auto& node,
       const auto&, const auto& primitive, const auto&) {
     hasInstances |= node.template hasExtension<CesiumGltf::ExtensionExtMeshGpuInstancing>();
-    trianglesOnly &= primitive.mode == CesiumGltf::MeshPrimitive::Mode::TRIANGLES;
+    const auto* material = CesiumGltf::Model::getSafe(&gltf.materials, primitive.material);
+    supported &= primitive.mode == CesiumGltf::MeshPrimitive::Mode::TRIANGLES &&
+        node.skin < 0 && primitive.targets.empty() &&
+        !primitive.template hasExtension<CesiumGltf::ExtensionExtMeshFeatures>() &&
+        (!material || material->alphaMode != "BLEND");
   });
-  return hasInstances && trianglesOnly;
+  return hasInstances && supported;
 }
 
 std::optional<CesiumGeospatial::BoundingRegion> cachedRegion(
@@ -239,7 +248,9 @@ void* UnityPrepareInstancedRendererResources::prepareInMainThread(Tile& tile, vo
       UnityPrepareRendererResources::prepareInMainThread(tile, load->baseResources));
   if (!main || !main->pGameObject) return main;
   CesiumUtility::ScopeGuard cleanup([&]() {
-    UnityPrepareRendererResources::free(tile, nullptr, main);
+    // This goes through our release barrier before the base returns shared
+    // meshes to its pool, including a partially configured prototype hierarchy.
+    this->free(tile, nullptr, main);
   });
   if (original.size() != main->primitiveInfos.size())
     throw std::runtime_error("Instanced primitive mapping changed during mesh preparation.");
@@ -283,6 +294,14 @@ void* UnityPrepareInstancedRendererResources::prepareInMainThread(Tile& tile, vo
 
 void UnityPrepareInstancedRendererResources::free(Tile& tile, void* loadResources, void* mainResources) noexcept {
   std::unique_ptr<BatchedLoadResult> load(static_cast<BatchedLoadResult*>(loadResources));
+  try {
+    auto* object = static_cast<CesiumGltfGameObject*>(mainResources);
+    if (object && object->pGameObject && *object->pGameObject != nullptr)
+      CesiumForUnity::CesiumInstancedRenderer::Release(*object->pGameObject);
+  } catch (...) {
+    // Managed objects may already be gone during an AppDomain reload. Native
+    // ownership must still be released through the original renderer.
+  }
   UnityPrepareRendererResources::free(tile, load ? load->baseResources : nullptr, mainResources);
 }
 
@@ -297,7 +316,8 @@ void UnityPrepareInstancedRendererResources::attachRasterInMainThread(
   // Raster resources are borrowed by property blocks, never owned by materials.
   auto* object = renderObject(tile);
   auto* texture = static_cast<UnityEngine::Texture*>(resources);
-  if (!_enabled || !object || !object->pGameObject || !texture || *texture == nullptr) return;
+  if (!object || !object->pGameObject || *object->pGameObject == nullptr ||
+      !texture || *texture == nullptr) return;
   const auto& rectangle = raster.getRectangle();
   const auto& projection = raster.getTileProvider().getProjection();
   CesiumForUnity::CesiumInstancedRenderer::AttachRaster(*object->pGameObject,

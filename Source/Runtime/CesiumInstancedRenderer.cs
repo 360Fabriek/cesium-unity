@@ -13,8 +13,9 @@ namespace CesiumForUnity
     /// </summary>
     [ExecuteAlways]
     [AddComponentMenu("")]
+    [DisallowMultipleComponent]
     [Reinterop]
-    internal class CesiumInstancedRenderer : MonoBehaviour
+    internal partial class CesiumInstancedRenderer : MonoBehaviour
     {
         private const int MaximumOverlays = 8;
         private static readonly int WorldToChartId = Shader.PropertyToID("_CesiumInstanceWorldToChart");
@@ -63,7 +64,7 @@ namespace CesiumForUnity
 
         internal static bool CanUse(Cesium3DTileset tileset)
         {
-            if (tileset == null) return false;
+            if (tileset == null || tileset.GetComponentInParent<CesiumMetadata>() != null) return false;
             var settings = tileset.GetComponent<CesiumInstancedRendering>();
             if (settings != null && !settings.enableInstancedRendering) return false;
             var georeference = tileset.GetComponentInParent<CesiumGeoreference>();
@@ -92,6 +93,9 @@ namespace CesiumForUnity
             int count, double3 radii, double4 rectangle, double4 referenceRectangle, double4x4 coverageBoxToEcef, bool clipCoverage)
         {
             if (count <= 0 || matrices == 0) return;
+            if (primitive == null) throw new ArgumentNullException(nameof(primitive));
+            if (primitive.GetComponent<CesiumInstancedRenderer>() != null)
+                throw new InvalidOperationException("The prototype already has an instanced renderer.");
             var renderer = primitive.AddComponent<CesiumInstancedRenderer>();
             renderer._instances = new double4x4[count];
             long bytes = checked((long)count * sizeof(double4x4));
@@ -109,7 +113,7 @@ namespace CesiumForUnity
             // Keep the overlay clip path in depth and shadow passes in all targets.
             foreach (string property in new[] { "_AlphaClip", "_BUILTIN_AlphaClip", "_AlphaCutoffEnable" })
                 if (_material.HasProperty(property)) _material.SetFloat(property, 1.0f);
-            _canInstance = SystemInfo.supportsInstancing && IsCesiumShader(_material.shader);
+            _canInstance = SystemInfo.supportsInstancing && _material.renderQueue < 3000 && IsCesiumShader(_material.shader);
             source.enabled = false;
             _anchor = GetComponent<CesiumGlobeAnchor>();
             _baseEcef = _anchor.localToGlobeFixedMatrix;
@@ -130,6 +134,8 @@ namespace CesiumForUnity
             double s = Math.Sin(_latitude), c = Math.Cos(_latitude);
             double e2 = 1.0 - radii.z * radii.z / (radii.x * radii.x);
             _properties = new MaterialPropertyBlock();
+            // Keep non-raster overrides set by the existing GameObject-created callback.
+            source.GetPropertyBlock(_properties);
             // An unattached overlay must not sample the prototype's geographic UVs.
             // Preserve material texture references: they are not owned by this renderer.
             foreach (string textureName in _material.GetTexturePropertyNames())
@@ -159,7 +165,8 @@ namespace CesiumForUnity
             var settings = tileset.GetComponent<CesiumInstancedRendering>();
             int maximum = settings == null ? 128 : Mathf.Clamp(settings.maximumInstancesPerBatch, 1, 128);
             double cellSize = settings == null ? 128.0 : Math.Max(1.0, settings.spatialBatchSize);
-            BuildBatches(maximum, cellSize, clipCoverage, math.mul(math.inverse(_chartToEcef), coverageBoxToEcef));
+            InitializeIntegration(source, maximum, cellSize, clipCoverage, coverageBoxToEcef);
+            RebuildBatches();
             ConfigureColliders(tileset.createPhysicsMeshes &&
                 (settings == null || settings.createInstanceColliders));
             _initialized = true;
@@ -172,7 +179,7 @@ namespace CesiumForUnity
             double4x4 toChart = math.mul(math.inverse(_chartToEcef), _baseEcef);
             for (int i = 0; i < _instances.Length; ++i)
             {
-                if (math.determinant(_instances[i]) == 0.0) continue;
+                if (!CesiumInstanceMath.IsUsableTransform(_instances[i])) continue;
                 if (clipCoverage && !CesiumInstanceMath.IntersectsCoverage(
                     math.mul(toChart, _instances[i]), _mesh.bounds, coverageBoxToChart)) continue;
                 double3 p = math.mul(toChart, _instances[i].c3).xyz;
@@ -197,38 +204,6 @@ namespace CesiumForUnity
             }
         }
 
-        private void ConfigureColliders(bool enabled)
-        {
-            MeshCollider prototype = GetComponent<MeshCollider>();
-            // No collider was created for a degenerate mesh; preserve that decision.
-            if (prototype == null) return;
-            prototype.enabled = false;
-            if (enabled)
-            {
-                foreach (Batch batch in _batches)
-                foreach (int i in batch.indices)
-                {
-                    var child = new GameObject("Instance collision " + i);
-                    child.hideFlags = gameObject.hideFlags;
-                    child.layer = gameObject.layer;
-                    child.transform.SetParent(transform, false);
-                    double4x4 m = _instances[i];
-                    double3 scale = new double3(math.length(m.c0.xyz), math.length(m.c1.xyz), math.length(m.c2.xyz));
-                    if (math.any(scale <= 0.0)) { UnityLifetime.Destroy(child); continue; }
-                    double3x3 rotation = new double3x3(m.c0.xyz / scale.x, m.c1.xyz / scale.y, m.c2.xyz / scale.z);
-                    if (math.determinant(rotation) < 0.0) { scale.x = -scale.x; rotation.c0 = -rotation.c0; }
-                    quaternion q = new quaternion(new float3x3((float3)rotation.c0, (float3)rotation.c1, (float3)rotation.c2));
-                    child.transform.localPosition = (Vector3)(float3)m.c3.xyz;
-                    child.transform.localRotation = new Quaternion(q.value.x, q.value.y, q.value.z, q.value.w);
-                    child.transform.localScale = (Vector3)(float3)scale;
-                    var collider = child.AddComponent<MeshCollider>();
-                    collider.cookingOptions = prototype.cookingOptions;
-                    collider.sharedMesh = _mesh;
-                }
-            }
-            UnityLifetime.Destroy(prototype);
-        }
-
         internal static void AttachRaster(GameObject model, string key, Texture texture,
             double4 rectangle, bool webMercator, double radius)
         {
@@ -238,8 +213,12 @@ namespace CesiumForUnity
 
         internal void SetRaster(string key, Texture texture, double4 rectangle, bool webMercator, double radius)
         {
-            if (!_initialized || texture == null ||
+            if (!_initialized || _released || texture == null || _material == null ||
                 !_material.HasProperty("_overlayTexture_" + key)) return;
+            // Validate before changing any slot or texture identity. A failed
+            // replacement must leave the previously attached raster usable.
+            Vector4 mapping = CesiumInstanceMath.RasterMapping(
+                _longitude, _latitude, rectangle, webMercator, radius);
             int slot = -1;
             for (int i = 0; i < MaximumOverlays; ++i)
                 if (_overlays[i] != null && _overlays[i].key == key) { slot = i; break; }
@@ -265,7 +244,7 @@ namespace CesiumForUnity
                 };
             Overlay overlay = _overlays[slot];
             overlay.texture = texture;
-            _mapping[slot] = CesiumInstanceMath.RasterMapping(_longitude, _latitude, rectangle, webMercator, radius);
+            _mapping[slot] = mapping;
             // The second component bounds Mercator deltas at the projection poles.
             _projection[slot] = new Vector4(webMercator ? 1.0f : 0.0f,
                 (float)CesiumInstanceMath.MercatorAngle(_latitude), 0.0f, 0.0f);
@@ -284,6 +263,7 @@ namespace CesiumForUnity
 
         internal void RemoveRaster(string key, Texture texture)
         {
+            if (_released || _properties == null) return;
             for (int i = 0; i < MaximumOverlays; ++i)
             {
                 Overlay overlay = _overlays[i];
@@ -292,24 +272,46 @@ namespace CesiumForUnity
                 _properties.SetFloat(overlay.coordinateId, -1.0f);
                 _properties.SetTexture(overlay.textureId, null);
                 _overlays[i] = null;
+                _mapping[i] = Vector4.zero;
+                _projection[i] = Vector4.zero;
+                _properties.SetVectorArray(MappingId, _mapping);
+                _properties.SetVectorArray(ProjectionId, _projection);
             }
         }
 
-        private void UpdateTransforms()
+        private bool UpdateTransforms()
         {
+            if (_released || _anchor == null || _georeference == null || _mesh == null) return false;
             Matrix4x4 parent = transform.parent == null ? Matrix4x4.identity : transform.parent.localToWorldMatrix;
             double4x4 ecefToLocal = _georeference.ecefToLocalMatrix;
             double4x4 baseEcef = _anchor.localToGlobeFixedMatrix;
-            if (!_dirty && parent == _lastParent && ecefToLocal.Equals(_lastEcefToLocal) && baseEcef.Equals(_baseEcef)) return;
+            Bounds localBounds = _mesh.bounds;
+            bool placementChanged = !baseEcef.Equals(_baseEcef);
+            bool boundsChanged = !localBounds.Equals(_lastMeshBounds);
+            if (!_dirty && parent.Equals(_lastParent) && ecefToLocal.Equals(_lastEcefToLocal) &&
+                !placementChanged && !boundsChanged) return true;
+            double4x4 worldFromEcef = math.mul(CesiumInstanceMath.ToDouble(parent), ecefToLocal);
+            if (!CesiumInstanceMath.IsUsableTransform(worldFromEcef) ||
+                !CesiumInstanceMath.IsUsableTransform(baseEcef))
+            {
+                _dirty = true;
+                return false;
+            }
+            _baseEcef = baseEcef;
+            if (placementChanged || boundsChanged)
+            {
+                // Previously rejected placements may now cross into coverage.
+                // Origin shifts alone do not change geographic membership.
+                RebuildBatches();
+                SynchronizeColliders();
+            }
             _dirty = false;
             _lastParent = parent;
             _lastEcefToLocal = ecefToLocal;
-            _baseEcef = baseEcef;
-            double4x4 worldFromEcef = math.mul(CesiumInstanceMath.ToDouble(parent), ecefToLocal);
+            _lastMeshBounds = localBounds;
             double4x4 worldFromModel = math.mul(worldFromEcef, _baseEcef);
             double4x4 worldToChart = math.inverse(math.mul(worldFromEcef, _chartToEcef));
             _properties.SetMatrix(WorldToChartId, CesiumInstanceMath.ToFloat(worldToChart));
-            Bounds localBounds = _mesh.bounds;
             foreach (Batch batch in _batches)
             {
                 for (int j = 0; j < batch.indices.Length; ++j)
@@ -321,16 +323,20 @@ namespace CesiumForUnity
                     else batch.bounds.Encapsulate(bounds);
                 }
             }
+            return true;
         }
 
         private void Submit(Camera camera)
         {
-            if (!_initialized || !isActiveAndEnabled || camera == null || camera.cameraType == CameraType.Preview ||
+            if (_released || _sourceRenderer == null || _sourceRenderer.forceRenderingOff || !_initialized || !isActiveAndEnabled || camera == null || camera.cameraType == CameraType.Preview ||
                 (camera.cullingMask & (1 << gameObject.layer)) == 0 || _mesh == null || _material == null) return;
-            UpdateTransforms();
+            if (!UpdateTransforms()) return;
             RenderParams parameters = _renderParams;
             parameters.camera = camera;
             parameters.layer = gameObject.layer;
+            parameters.shadowCastingMode = _sourceRenderer.shadowCastingMode;
+            parameters.receiveShadows = _sourceRenderer.receiveShadows;
+            parameters.renderingLayerMask = _sourceRenderer.renderingLayerMask;
             foreach (Batch batch in _batches)
             {
                 parameters.worldBounds = batch.bounds;
@@ -338,7 +344,10 @@ namespace CesiumForUnity
                     Graphics.RenderMeshInstanced(parameters, _mesh, 0, batch.matrices);
                 else
                     for (int i = 0; i < batch.matrices.Length; ++i)
+                    {
+                        parameters.worldBounds = CesiumInstanceMath.TransformBounds(batch.matrices[i], _mesh.bounds);
                         Graphics.RenderMesh(parameters, _mesh, 0, batch.matrices[i]);
+                    }
             }
         }
 
@@ -354,6 +363,9 @@ namespace CesiumForUnity
 
         private void OnEnable()
         {
+            if (_released) return;
+            // Idempotent registration also protects editor reload/re-enable paths.
+            OnDisable();
             _dirty = true;
             Camera.onPreCull += BeforeCull;
             RenderPipelineManager.beginCameraRendering += BeforeSrpCamera;
@@ -375,6 +387,7 @@ namespace CesiumForUnity
             Configure(go, 0L, 0, default(double3), default(double4), default(double4), default(double4x4), false);
             AttachRaster(go, "", texture, default(double4), false, 1.0);
             DetachRaster(go, "", texture);
+            Release(go);
         }
     }
 }

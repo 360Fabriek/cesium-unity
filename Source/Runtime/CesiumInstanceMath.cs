@@ -7,6 +7,18 @@ namespace CesiumForUnity
     /// <summary>Double-precision placement and origin-relative raster projection.</summary>
     internal static class CesiumInstanceMath
     {
+        internal static bool IsUsableTransform(double4x4 m)
+        {
+            if (!math.all(math.isfinite(m.c0)) || !math.all(math.isfinite(m.c1)) ||
+                !math.all(math.isfinite(m.c2)) || !math.all(math.isfinite(m.c3))) return false;
+            // Placements are affine. Reject projective or singular data before
+            // bounds calculation, integer cell conversion, or matrix inversion.
+            if (Math.Abs(m.c0.w) > 1e-12 || Math.Abs(m.c1.w) > 1e-12 ||
+                Math.Abs(m.c2.w) > 1e-12 || Math.Abs(m.c3.w - 1.0) > 1e-12) return false;
+            double determinant = math.determinant(new double3x3(m.c0.xyz, m.c1.xyz, m.c2.xyz));
+            return math.isfinite(determinant) && determinant != 0.0;
+        }
+
         internal static double4x4 ToDouble(Matrix4x4 m)
         {
             return new double4x4(
@@ -74,15 +86,21 @@ namespace CesiumForUnity
             double4 rectangle, bool webMercator, double radius)
         {
             double width = rectangle.z - rectangle.x, height = rectangle.w - rectangle.y;
-            if (!(width > 0.0) || !(height > 0.0) || !(radius > 0.0))
-                throw new ArgumentException("Raster rectangle and projection radius must be positive.");
+            if (!math.all(math.isfinite(rectangle)) || !math.isfinite(longitude) ||
+                !math.isfinite(latitude) || !math.isfinite(radius) ||
+                !math.isfinite(width) || !math.isfinite(height) ||
+                !(width > 0.0) || !(height > 0.0) || !(radius > 0.0))
+                throw new ArgumentException("Raster coordinates must be finite, with positive extents and radius.");
             // Choose the equivalent longitude nearest the centre of the attached image.
             double centreLongitude = (rectangle.x + width * 0.5) / radius;
             longitude += Math.Round((centreLongitude - longitude) / (2.0 * Math.PI)) * 2.0 * Math.PI;
-            return new Vector4(
+            var result = new Vector4(
                 (float)((longitude * radius - rectangle.x) / width),
                 (float)(((webMercator ? MercatorAngle(latitude) : latitude) * radius - rectangle.y) / height),
                 (float)(radius / width), (float)(radius / height));
+            if (!math.all(math.isfinite(new float4(result.x, result.y, result.z, result.w))))
+                throw new ArgumentException("Raster mapping cannot be represented by finite shader parameters.");
+            return result;
         }
     }
 }
