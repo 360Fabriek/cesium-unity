@@ -139,7 +139,7 @@ std::optional<CesiumGeospatial::BoundingRegion> computeRegion(
   const auto& r = region.getRectangle();
   model.extras[boundsKey] = std::vector<CesiumUtility::JsonValue>{
       r.getWest(), r.getSouth(), r.getEast(), r.getNorth(),
-      region->getMinimumHeight(), region->getMaximumHeight()};
+      region.getMinimumHeight(), region.getMaximumHeight()};
   return region;
 }
 
